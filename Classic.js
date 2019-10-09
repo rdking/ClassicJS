@@ -17,6 +17,8 @@ const owners = new WeakMap;     //Owning class TYPEID for each registered functi
 const pvt = new WeakMap;        //Private data for each instance
 const protMap = new WeakMap;    //Inheritable objects from each class
 const types = new WeakMap;      //Map of constructors and their TYPEIDs
+const initFns = new WeakMap;    //Map of initialization functions
+const protNameMap = new WeakMap;//Name mapping for the protected members
 const stack = new Stack;        //Function registration used to validate access
 
 /**
@@ -166,7 +168,7 @@ function convertPrivates(data, stack, TYPEID) {
  * on the prototype of the base class.
  * @param {Object} obj - top of the prototype chain to search for an object
  * with protected properties.
- * @returns {Object} containing protected properties.
+ * @returns {Object} containing protected properties and a map of the class-specific names.
  */
 function getInheritance(obj, TYPEID) {
     while (obj && (!protMap.has(obj) || obj.hasOwnProperty(TYPEID))) {
@@ -174,7 +176,22 @@ function getInheritance(obj, TYPEID) {
     }
 
     if (obj) {
-        return protMap.get(obj);
+        let retval = {
+            map: {},
+            data: {}
+        };
+        let prot = protMap.get(obj);
+        let keys = Object.getOwnPropertyNames(prot).concat(
+            Object.getOwnPropertySymbols(prot)
+        );
+
+        for (let key of keys) {
+            let name = Symbol(key.toString());
+            Object.defineProperty(retval.data, name, Object.getOwnPropertyDescriptor(prot, key));
+            retval.map[key] = name;
+        }
+
+        return retval;
     }
 }
 
@@ -205,10 +222,11 @@ function isNative(fn) {
            fn.toString().includes("[native code]");
 }
 
-function Super(inst, base, ...args) {
+function Super(memberProto, inst, base, ...args) {
     let idProto = Object.getPrototypeOf(inst);
     let newTarget = function() {},
         proto = Object.getPrototypeOf(idProto);
+        pvtData = pvt.get(idProto);
     if (proto === inst.constructor.prototype) {
         newTarget = inst.constructor;
     }
@@ -224,6 +242,8 @@ function Super(inst, base, ...args) {
             Object.defineProperty(newInst, typeId, { value: void 0 });
         }
     }
+    runInitializers(idProto, memberProto);
+    runInitializers(pvtData, Object.getPrototypeOf(pvtData));
     return inst;
 }
 
@@ -258,24 +278,17 @@ function fixupData(data) {
     });
 }
 
-/**
- * Finds the collection of TYPEID symbols for the ancestors of this class.
- * @param {function} base - Constructor of the base class to start scanning.
- * @param {WeakMap} types - Map holding all the registered TYPEID symbols.
- * @returns {Symbol[]} - 0 or more TYPEID symbols.
- */
-function getAncestorIDs(base, types) {
-    let retval = [];
-    while (base && !types.has(base))
-        base = Object.getPrototypeOf(base);
+function runInitializers(inst, mProto) {
+    let keys = Object.getOwnPropertyNames(mProto).concat(
+        Object.getOwnPropertySymbols(mProto)
+    );
 
-    if (base) {
-        retval = types.get(base);
+    for (let key of keys) {
+        if (initFns.has(mProto[key])) {
+            inst[key] = initFns.get(mProto[key]).call(this);
+        }
     }
-
-    return retval;
 }
-
 
 /**
  * Produces an extendable function to be used as the base class for another
@@ -329,9 +342,20 @@ module.exports = function Classic(base, data) {
                 let typeId = validateAccess(stack);
                 let pprop = prop.substr(1);
                 let proto = getIdObject(typeId, Object.getPrototypeOf(receiver));
+                let nameMap = protNameMap.get(base);
+
+                //Remapping to prevent cousin class leakage.
+                if (nameMap && (pprop in nameMap)) {
+                    pprop = nameMap[pprop];
+                }
 
                 if (!proto) {
-                    throw new TypeError("Receiver does not contain the requested property.")
+                    if (typeof(receiver) === "function") {
+                        proto = receiver;
+                    }
+                    else {
+                        throw new TypeError("Receiver does not contain the requested property.")
+                    }
                 }
 
                 let ptarget = pvt.get(proto);
@@ -368,7 +392,7 @@ module.exports = function Classic(base, data) {
                 }
             }
             else {
-                retval = Reflect.get(target, prop, receiver);
+                retval = Reflect.set(target, prop, value, receiver);
             }
             return retval;
         }
@@ -401,19 +425,23 @@ module.exports = function Classic(base, data) {
                 super: {
                     configurable: true,
                     value: function(...args) {
-                        return Super(this, base, ...args);
+                        return Super(shadow.prototype, this, base, ...args);
                     }
                 }
             }), handler);
 
-        pvt.set(idProto, Object.create(data[PRIVATE]));
-
+        let pvtData = Object.create(data[PRIVATE]);
+        pvt.set(idProto, pvtData);
+        
+        //TODO: Put in initializer runner somewhere below here or in Super.
         if (new.target) {
             if (isNative(ancestor) || (ancestor === base)) {
                 let fake = function() {};
                 fake.prototype = idProto;
                 Object.setPrototypeOf(idProto, proto);
                 retval = Reflect.construct(ancestor, args, fake);
+                runInitializers(idProto, shadow.prototype);
+                runInitializers(pvtData, data[PRIVATE]);
             } 
             else{
                 let instance = Object.create(idProto);
@@ -455,13 +483,15 @@ module.exports = function Classic(base, data) {
     
     let inheritance = getInheritance(base.prototype, TYPEID);
     if (inheritance) {
-        Object.setPrototypeOf(data[PROTECTED], inheritance);
-        Object.setPrototypeOf(data[PRIVATE], inheritance);
+        Object.setPrototypeOf(data[PROTECTED], inheritance.data);
+        Object.setPrototypeOf(data[PRIVATE], inheritance.data);
+        protNameMap.set(base.prototype, inheritance.map);
     }
-    inheritance = getInheritance(shadow, TYPEID);
+    inheritance = getInheritance(base, TYPEID);
     if (inheritance) {
-        Object.setPrototypeOf(data[STATIC][PROTECTED], inheritance);
-        Object.setPrototypeOf(data[STATIC][PRIVATE], inheritance);
+        Object.setPrototypeOf(data[STATIC][PROTECTED], inheritance.data);
+        Object.setPrototypeOf(data[STATIC][PRIVATE], inheritance.data);
+        protNameMap.set(base, inheritance.map);
     }
 
     Object.seal(data[PRIVATE]);
@@ -475,8 +505,16 @@ module.exports = function Classic(base, data) {
 
     return shadow;
 }
+
+const AccessLevels = {
+    Private: Symbol("ClassicJS::PRIVATE"),
+    Protected: Symbol("ClassicJS::PROTECTED"),
+    Public: Symbol("ClassicJS::PUBLIC"),
+    Static: Symbol("ClassicJS::STATIC")
+};
+let useStrings = false;
 Object.defineProperties(module.exports, {
-    "PrivateAccessSpecifier": {
+    PrivateAccessSpecifier: {
         enumerable: true,
         get() { return TRIGGER; },
         set(v) {
@@ -489,21 +527,34 @@ Object.defineProperties(module.exports, {
             }
         }
     },
+    UseStrings: {
+        enumerable: true,
+        get() { return useStrings; },
+        set(v) { useStrings = !!v; }
+    },
     STATIC: {
         enumerable: true,
-        value: Symbol("ClassicJS::STATIC")
+        get() { return useStrings ? "static" : AccessLevels.Static; }
     },
     PRIVATE: {
         enumerable: true,
-        value: Symbol("ClassicJS::PRIVATE")
+        get() { return useStrings ? "private" : AccessLevels.Private; }
     },
     PROTECTED: {
         enumerable: true,
-        value: Symbol("ClassicJS::PROTECTED")
+        get() { return useStrings ? "protected" : AccessLevels.Protected; }
     },
     PUBLIC: {
         enumerable: true,
-        value: Symbol("ClassicJS::PUBLIC")
+        get() { return useStrings ? "public" : AccessLevels.Public; }
+    },
+    init: {
+        enumerable: true,
+        value: function init(fn) {
+            let retval = {};
+            initFns.set(retval, fn);
+            return retval;
+        }
     },
     cast: {
         enumerable: true,

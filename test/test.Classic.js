@@ -80,3 +80,35 @@ try {
 catch(e) {
     console.error("No such luck accessing private data.", e);
 }
+
+const Ex3 = Classic({
+    [PRIVATE]: {
+        obj1: Classic.init(() => ({ value: ~~(Math.random() * 65536) }))
+    },
+    [PUBLIC]: {
+        obj2: Classic.init(() => ({ value: ~~(Math.random() * 256) })),
+        print() {
+            console.log(`(private this).obj1 = ${JSON.stringify(this.$obj1)}`);
+            console.log(`this.obj2 = ${JSON.stringify(this.obj2)}`);
+        }
+    }
+});
+
+let c = new Ex3;
+let d = new Ex3;
+c.print();
+d.print();
+console.log(`c.obj2 === d.obj2 -> ${c.obj2 === d.obj2}`);
+
+const Ex4 = Classic(Ex, {
+    [STATIC]: {
+        [PUBLIC]: {
+            leak(obj) {
+                console.log(`Peaking up my cousin's skirt!`);
+                console.log(`(private obj).fubar = ${obj.$fubar}`);
+            }
+        }
+    }
+});
+
+Ex4.leak(b);
