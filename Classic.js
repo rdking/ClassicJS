@@ -676,7 +676,7 @@ Object.defineProperties(Classic, {
             if (initFns.has(placeholder))
                 return initFns.get(placeholder)();
         }
-    }s
+    }
 }); 
 
 const { STATIC, PRIVATE, PROTECTED, PUBLIC } = Classic;
