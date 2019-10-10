@@ -676,18 +676,7 @@ Object.defineProperties(Classic, {
             if (initFns.has(placeholder))
                 return initFns.get(placeholder)();
         }
-    },
-    cast: {
-        enumerable: true,
-        value: function cast(type, inst) {
-            let retval;
-            if (types.has(type)) {
-                let typeId = types.get(type);
-                retval = getIdObject(typeId, inst);
-            }
-            return retval;
-        }
-    }
+    }s
 }); 
 
 const { STATIC, PRIVATE, PROTECTED, PUBLIC } = Classic;

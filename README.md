@@ -205,6 +205,5 @@ const Ex = Classic({
 * **PLACEHOLDER** - Used to identify prototype elements that are placeholders for initialization functions.
 
 ### Methods
-* **init** - 
-* **getInitValue** - 
-* **cast** - 
+* **init** - Used to set an initializer function on the prototype to add an instance-specific value to a property.
+* **getInitValue** - Retrieves a copy of the instance-specific value for a property.
