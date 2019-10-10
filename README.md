@@ -104,52 +104,15 @@ With ClassicJS, things work a little differently. In an attempt to emulate the n
 
 Given the usual copy-on-write behavior of prototypes, this must seem like a curious thing do to. Well, remember when I spoke about the requirements of native class functions? Doing things this way allows us to gain 3 important behaviors, 2 of which solve the native class object problem:
 
-1. _**Class-Specific Instancing**_ - This behavior causes any call through an instance object to a lexically declared function on one of the prototype objects to receive as `this` the ancestor instance object created by the class corresponding to the prototype object.
+1. _**Class-Specific Instancing**_ - This behavior creates and initializes an instance object for each ancestor class in the prototype chain.
 
-If you're scratching your head about what this means, let's say you had the following code:
-```js
-const Base = Classic({
-    [PUBLIC]: {
-        data: "apple"
-        bump(instance) {
-            console.log(`this.data = ${this.data}`);
-            console.log(`instance.data = ${instance.data}`);
-        }
-    }
-});
-
-const Derived = Classic(Base, {
-    [PUBLIC]: {
-        data: "orange",
-        change() {
-            delete this.data;
-            this.bump(this);
-            this.data = "orange";
-            this.bump(this);
-        }
-    }
-});
-
-let d = new Derived();
-d.bump(d);
-d.change();
-```
-If you were to run this, you'd see:
-```
-this.data = apple
-instance.data = orange
-this.data = apple
-instance.data = apple
-this.data = orange
-instance.data = orange
-```
-What happened here is that each time `bump()` is called, the `this` that it received is actually the ancestor instance created by `Base`. That's why `this.data = apple` for the first 2 calls. The other interesting point is that when `this.data = "orange";` was encountered, since `this.hasOwnProperty("data")` was false, the ancestor object received the request. If no ancestor object contained a `data` element, then the derived instance would have directly received the request. Put simply, ancestor objects interfere with copy-on-write behavior to ensure that data stays on the correct instance object, and the correct instance object is always received by any function that was a part of the prototype chain during the lexical declaration of the class.
+This is the core feature that lets us have classes that work more like they do in compiled languages. The next 2 behaviors are only possible because of this behavior. Without this feature, it would not be possible to implement something like fields while still preserving the promises of inheritance. This feature is also what allows us to use Proxy in conjunction with private data despite the WeakMap-based implementation.
 
 2. _**Data Isolation**_ - This is something completely new. This behavior persistently assigns property changes to the ancestor instance of the current instance that contains the nearest definition for the property.
 
 This means that if a property key already exists, changes will be directly assigned to the owning ancestor instance instead of creating a new value on the topmost instance. While peculiar in ES, this feature allows class instances to work properly under all circumstances without any suprising side effects on class inheritance.
 
-3. _**Initializer Changes Via The Prototype**_ - This feature preserves the notion of being able to change the prototype to alter the default values that will be associated with each instance.
+3. _**Initializer Changes Via The Prototype**_ - This behavior preserves the notion of being able to change the prototype to alter the default values that will be associated with each instance.
 
 Take the following code for example:
 ```js
