@@ -1,15 +1,14 @@
 # ClassicJS
 This is a library designed to provide fully privileged member support to ES6 classes. ClassicJS is little more than a wrapper function. However, unlike the great many other wrapper functions out there, this one doesn't focus on wrapping the target class. You can choose to wrap a new target class, an existing base class, or even no class at all. All you really need is a prototype object. ClassicJS will generate a class for you from that.
 
-## Features:
+## Features
 * Full support for private members, even when Proxy-wrapped.
 * Full support for protected members.
 * Full support for private static members.
 * Full support for protected static members.
-* Support for super access to ancestor data.
-* Support for static constructors.
+* Full support for prototype-modifiable field initialization.
 
-## Syntax:
+## How To Use
 There's 2 different ways you can use ClassicJS:
 
 1. As a base class:
@@ -80,7 +79,7 @@ If you want to extend another `class`, constructor `function`, or native type, j
 const Ex3 = Classic(String, {...});
 ```
 
-## Structure:
+### Structure:
 Normally, when using ES6 classes, every instance created looks something like this:
 
 ```js
@@ -105,7 +104,7 @@ With ClassicJS, things work a little differently. In an attempt to emulate the n
 
 Given the usual copy-on-write behavior of prototypes, this must seem like a curious thing do to. Well, remember when I spoke about the requirements of native class functions? Doing things this way allows us to gain 3 important behaviors, 2 of which solve the native class object problem:
 
-1. Class-Specific Instancing - This behavior causes any call through an instance object to a lexically declared function on one of the prototype objects to receive as `this` the ancestor instance object created by the class corresponding to the prototype object.
+1. _**Class-Specific Instancing**_ - This behavior causes any call through an instance object to a lexically declared function on one of the prototype objects to receive as `this` the ancestor instance object created by the class corresponding to the prototype object.
 
 If you're scratching your head about what this means, let's say you had the following code:
 ```js
@@ -146,15 +145,35 @@ instance.data = orange
 ```
 What happened here is that each time `bump()` is called, the `this` that it received is actually the ancestor instance created by `Base`. That's why `this.data = apple` for the first 2 calls. The other interesting point is that when `this.data = "orange";` was encountered, since `this.hasOwnProperty("data")` was false, the ancestor object received the request. If no ancestor object contained a `data` element, then the derived instance would have directly received the request. Put simply, ancestor objects interfere with copy-on-write behavior to ensure that data stays on the correct instance object, and the correct instance object is always received by any function that was a part of the prototype chain during the lexical declaration of the class.
 
-2. Type Casting - This behavior returns the ancestor instance of the current instance object, even if the requested type is a native object. This only works if the instance is truly an instance of the requested type.
+2. _**Data Isolation**_ - This is something completely new. This behavior persistently assigns property changes to the ancestor instance of the current instance that contains the nearest definition for the property.
 
-As you might imagine, this screws things up a bit for extending native types. For instance, `Array.isArray(this)` won't work even if your ClassicJS class extends `Array`. To fix this issue, there is `Classic.cast(type, instance)`. The `type` parameter specifies the destination type, while `instance` is the object to be cast. This operation searches `instance` and either retrieves the corresponding ancestor, or returns `undefined` if it can't be found. This lets you continue using utility functions like this: `Array.isArray(Classic.cast(Array, this));`. This gives you back the freedom of using all the native object methods.
+This means that if a property key already exists, changes will be directly assigned to the owning ancestor instance instead of creating a new value on the topmost instance. While peculiar in ES, this feature allows class instances to work properly under all circumstances without any suprising side effects on class inheritance.
 
-3. Super Access To Ancestor Data - This is something completely new. Think of how super worked for functions and just apply that to data as well now.
+3. _**Initializer Changes Via The Prototype**_ - This feature preserves the notion of being able to change the prototype to alter the default values that will be associated with each instance.
 
-This is a direct side effect of Class-Specific Instancing. Since the ancestral instances are stacked in the prototype chain in the same order as the class prototype objects, `super` can be used to retrieve ancestor data. Unfortunately, Javascript doesn't support `super.super`, but since you have `Classic.cast`, you should still be able to access any ancestor instance you want directly.
+Take the following code for example:
+```js
+import Classic from "classicjs";
+const { STATIC, PRIVATE, PROTECTED, PUBLIC, 
+        PLACEHOLDER, init=INIT, getInitValue } = Classic;
 
-## Foot-gun Avoidance:
+const Ex = Classic({
+    obj: INIT(() => ({ a: 1 }));
+});
+```
+When instantiated, you'll get an instance of `Ex` with a single property `obj` having a unique copy of an object matching `{ a: 1 }`. Every new instance will receive its own copy. However, if you looked at `Ex.prototype.obj`, all you'd find is a non-extensible object that looks like `{}`. That object can be recognized via the 1 property it has: namely `PLACEHOLDER in Ex.prototype.obj === true`. 
+
+With this, you can identify which prototype properties have initializers. If you want a copy of the data that might get stored on an instance, you can do this:
+```js
+getInitValue(Ex.prototype.obj);
+```
+Note that this will be a unique instance of the data. To change the initializer that is used, just use `Classic.init` as was done to create the initializer:
+```js
+Ex.prototype.obj = INIT(() => { a: 42 });
+```
+The change will take effect on the next fetch of the initial value. Each new instance created after this will receive an instance copy of the new object.
+
+### Foot-gun Avoidance:
 I know, you don't want to use something like this because of the foot-gun of objects on the prototype, right? Don't worry. I covered that case too! I added 1 more API just to make this task easier and clear. Take a look:
 
 ```js
@@ -172,3 +191,20 @@ const Ex = Classic({
 ```
 
 `Classic.init` registers the function you pass it as an initializer for the property. When the class is instantiated, all such initializers are run to generate the value that will go on the class-specific instance. With this, you can kiss those foot-guns goodbye.
+
+## API
+
+### Configuration
+* **PrivateAccessSpecifier** - Sets the Identifier character reserved for use to access non-public members. Can be either `$` or `_`. Default is '$'.
+* **UseStrings** - Use to specify whether string keys or Symbol keys will be the values for the access modifier constants below.
+
+### Constants
+* **STATIC** - Used to define members that are part of the constructor as opposed to an instance.
+* **PRIVATE** - Used to define members that cannot be accessed outside of the owning object's type.
+* **PROTECTED** - Used to define members that cannot be publicly accessed, but are still accessible by the owning object's type and any descendants of that type.
+* **PLACEHOLDER** - Used to identify prototype elements that are placeholders for initialization functions.
+
+### Methods
+* **init** - 
+* **getInitValue** - 
+* **cast** - 
