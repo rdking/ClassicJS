@@ -12,7 +12,9 @@ class Stack extends Array {
     peek() { return this[this.length - 1]; }
 }
 
+let useStrings = false;
 let TRIGGER = '$';
+
 const owners = new WeakMap;     //Owning class TYPEID for each registered function
 const pvt = new WeakMap;        //Private data for each instance
 const protMap = new WeakMap;    //Inheritable objects from each class
@@ -20,6 +22,8 @@ const types = new WeakMap;      //Map of constructors and their TYPEIDs
 const initFns = new WeakMap;    //Map of initialization functions
 const protNameMap = new WeakMap;//Name mapping for the protected members
 const stack = new Stack;        //Function registration used to validate access
+const TARGET = Symbol("Proxy Target"); //Used to retrieve the target from the proxy
+const UNUSED = Symbol();        //Used to ensure that a property isn't found.
 
 /**
  * Generates a stupidly long sequence of random numbers that is likely to never
@@ -67,6 +71,24 @@ function getIdObject(TYPEID, target) {
         retval = Object.getPrototypeOf(retval);
     }
     return retval;
+}
+
+/**
+ * Searches the prototype chain for an object containing the given property. If
+ * the property is not found before reaching the topmost prototype object, the
+ * original target is used as the default value.
+ * @param {string|Symbol} prop - key of the property we expect
+ * @param {Object} target - instance object who's prototypes will be searched
+ * @returns {Object} - the found object, or target if no object was found.
+ */
+function getIdObjectWithProp(prop, target) {
+    let retval = Object.getPrototypeOf(target);
+
+    while (retval && !(pvt.has(retval) && retval.hasOwnProperty(prop))) {
+        retval = Object.getPrototypeOf(retval);
+    }
+
+    return retval || target;
 }
 
 function makePvtName(fn, stack, TYPEID) {
@@ -210,7 +232,7 @@ function validateAccess(stack) {
     if (eStack[0] === "Error")
         eStack.shift();
 
-    if (!eStack[3].includes(fn.name))
+    if (!eStack[3 + parseInt(validateAccess.offset || 0)].includes(fn.name))
         throw new SyntaxError(`Invalid private access specifier encountered.`);
 
     return owners.get(fn);
@@ -226,7 +248,7 @@ function Super(memberProto, inst, base, ...args) {
     let idProto = Object.getPrototypeOf(inst);
     let newTarget = function() {},
         proto = Object.getPrototypeOf(idProto);
-        pvtData = pvt.get(idProto);
+        pvtData = pvt.get(idProto) || {};
     if (proto === inst.constructor.prototype) {
         newTarget = inst.constructor;
     }
@@ -240,6 +262,8 @@ function Super(memberProto, inst, base, ...args) {
         let typeId = types.get(base);
         if (!newInst.hasOwnProperty(typeId)) {
             Object.defineProperty(newInst, typeId, { value: void 0 });
+            if (!pvt.has(newInst))
+                pvt.set(newInst, Object.seal({}));
         }
     }
     runInitializers(idProto, memberProto);
@@ -282,10 +306,19 @@ function runInitializers(inst, mProto) {
     let keys = Object.getOwnPropertyNames(mProto).concat(
         Object.getOwnPropertySymbols(mProto)
     );
+    let isID = pvt.has(inst);
 
     for (let key of keys) {
         if (initFns.has(mProto[key])) {
             inst[key] = initFns.get(mProto[key]).call(this);
+        }
+        else if (isID && (typeof(mProto[key]) !== "function")) {
+            Object.defineProperty(inst, key, {
+                configurable: true,
+                enumerable: true,
+                writable: true,
+                value: mProto[key]
+            });
         }
     }
 }
@@ -298,7 +331,7 @@ function runInitializers(inst, mProto) {
  * @param {DataSpec} data - Object describing the data that will exist on the
  * prototype and it's corresponding privileges.
  */
-module.exports = function Classic(base, data) {
+function Classic(base, data) {
     switch (arguments.length) {
         case 0:
             base = Object;
@@ -334,7 +367,10 @@ module.exports = function Classic(base, data) {
     const handler = {
         get(target, prop, receiver) {
             let retval;
-            if ((typeof(prop) == "string") && (prop[0] === TRIGGER)) {
+            if (prop === TARGET) {
+                retval = target;
+            }
+            else if ((typeof(prop) == "string") && (prop[0] === TRIGGER)) {
                 /**
                  * This is private member request. So the target doesn't matter.
                  * The real target is the prototype object with our TYPEID on it.
@@ -398,8 +434,67 @@ module.exports = function Classic(base, data) {
         }
     };
     const instanceHandler = {
-        get: handler.get,
-        set: handler.set,
+        target: void 0,
+        get(target, prop, receiver) {
+            let retval;
+
+            if (this.target && !this.target.hasOwnProperty(prop)) {
+                prop = UNUSED;
+            }
+            
+            try {
+                validateAccess.offset = 1;
+                retval = handler.get(target, prop, receiver);
+            }
+            finally {
+                delete validateAccess.offset;
+            }
+
+            if ((typeof(retval) === "function") && /_\$\d{4,}\$_/.test(retval.name) && 
+                (owners.get(target[TARGET] || target) !== TYPEID)) {
+                retval = new Proxy(retval, instanceHandler);
+            }
+
+            return retval;
+        },
+        set(target, prop, value, receiver) {
+            /**
+             * The different thing here is that the first idProto object
+             * containing prop as an own property is the one that will
+             * receive the [[Set]] request.
+             */
+            let retval = false;
+            let idProto = getIdObjectWithProp(prop, receiver);
+
+            try {
+                validateAccess.offset = 1;
+                retval = handler.set(target, prop, value, idProto);
+            }
+            finally {
+                delete validateAccess.offset;
+            }
+            return retval;
+        },
+        ownKeys(target) {
+            let retval;
+            if (this.target) {
+                retval = Reflect.ownKeys(this.target);
+            }
+            else {
+                retval = Reflect.ownKeys(target);
+            }
+            return retval;
+        },
+        has(target, key) {
+            let retval;
+            if (this.target) {
+                retval = Reflect.has(this.target, key);
+            }
+            else {
+                retval = Reflect.has(target, key);
+            }
+            return retval;
+        },
         defineProperty(target, prop, desc) {
             let retval;
             if ((typeof(prop) === "string") && (prop[0] === TRIGGER)) {
@@ -409,6 +504,13 @@ module.exports = function Classic(base, data) {
                 retval = Reflect.defineProperty(target, prop, desc);
             }
             return retval;
+        },
+        apply(target, context, args) {
+            let fn = target[TARGET] || target;
+            this.target = getIdObject(owners.get(fn), context);
+            let retval = Reflect.apply(fn, context, args);
+            this.target = void 0;
+            return retval;
         }
     };
 
@@ -416,11 +518,12 @@ module.exports = function Classic(base, data) {
     data = convertPrivates(data, stack, TYPEID);
 
     let shadow = function ClassBase(...args) {
+        let hasCtor = shadow.prototype.hasOwnProperty("constructor");
         let retval, 
+            baseTypeId = types.get(base),
             proto = new.target ? new.target.prototype : Object.getPrototypeOf(this),
-            ancestor = shadow.prototype.hasOwnProperty("constructor")
-                ? shadow.prototype.constructor : base,
-            idProto = new Proxy(Object.create(proto, {
+            ancestor = hasCtor ? shadow.prototype.constructor : base,
+            rawIdProto = Object.create(proto, {
                 [TYPEID]: { value: void 0 },
                 super: {
                     configurable: true,
@@ -428,7 +531,8 @@ module.exports = function Classic(base, data) {
                         return Super(shadow.prototype, this, base, ...args);
                     }
                 }
-            }), handler);
+            }),
+            idProto = new Proxy(rawIdProto, handler);
 
         let pvtData = Object.create(data[PRIVATE]);
         pvt.set(idProto, pvtData);
@@ -440,6 +544,9 @@ module.exports = function Classic(base, data) {
                 fake.prototype = idProto;
                 Object.setPrototypeOf(idProto, proto);
                 retval = Reflect.construct(ancestor, args, fake);
+                if (!hasCtor) {
+                    Object.defineProperty(retval, baseTypeId, { value: void 0 });
+                }
                 runInitializers(idProto, shadow.prototype);
                 runInitializers(pvtData, data[PRIVATE]);
             } 
@@ -457,7 +564,7 @@ module.exports = function Classic(base, data) {
             retval = ancestor.apply(this, args) || this;
             Object.setPrototypeOf(retval, idProto);
         }
-        delete idProto.super;
+        delete rawIdProto.super;
         
         return new Proxy(retval, instanceHandler);
     }
@@ -465,6 +572,7 @@ module.exports = function Classic(base, data) {
     if (!types.has(base)) {
         types.set(base, Symbol(base.name));
     }
+
     types.set(shadow, TYPEID);
 
     shadow.prototype = Object.create(base.prototype, Object.getOwnPropertyDescriptors(data[PUBLIC]));
@@ -512,8 +620,8 @@ const AccessLevels = {
     Public: Symbol("ClassicJS::PUBLIC"),
     Static: Symbol("ClassicJS::STATIC")
 };
-let useStrings = false;
-Object.defineProperties(module.exports, {
+
+Object.defineProperties(Classic, {
     PrivateAccessSpecifier: {
         enumerable: true,
         get() { return TRIGGER; },
@@ -548,12 +656,25 @@ Object.defineProperties(module.exports, {
         enumerable: true,
         get() { return useStrings ? "public" : AccessLevels.Public; }
     },
+    PLACEHOLDER: {
+        enumerable: true,
+        value: Symbol(`Initializer PlaceHolder`)
+    },
     init: {
         enumerable: true,
         value: function init(fn) {
-            let retval = {};
+            let retval = Object.freeze(Object.create(Object.prototype, {
+                [Classic.PLACEHOLDER]: { value: void 0}
+            }));
             initFns.set(retval, fn);
             return retval;
+        }
+    },
+    getInitValue: {
+        enumerable: true,
+        value: function getInitValue(placeholder) {
+            if (initFns.has(placeholder))
+                return initFns.get(placeholder)();
         }
     },
     cast: {
@@ -569,4 +690,6 @@ Object.defineProperties(module.exports, {
     }
 }); 
 
-const { STATIC, PRIVATE, PROTECTED, PUBLIC } = module.exports;
+const { STATIC, PRIVATE, PROTECTED, PUBLIC } = Classic;
+
+module.exports = Classic;

@@ -14,7 +14,7 @@ const Ex = Classic({
                 try {
                     console.log(`(private Ex).tau = ${this.$tau}`);
                 } catch(e) {
-                    console.error("Can't access an instance property in the static scope.", e);
+                    console.error("Can't access an instance property in the static scope.");
                 }
             }      
         }
@@ -34,11 +34,14 @@ const Ex = Classic({
             console.log("Originally....");
             this.print();
             this.$foo = "fu";
+            this.alpha = "aleph";
         },
         print() {
             console.log(`(private this).foo = ${this.$foo}`);
             console.log(`(private this).bar = ${this.$bar}`);
             console.log(`(private this).fubar = ${this.$fubar}`);
+            console.log(`this.fubar = ${this.alpha}`);
+            console.log(`this.fubar = ${this.beta}`);
         }
     }
 });
@@ -53,7 +56,7 @@ try {
     console.log(`(private a).fubar = ${a.$fubar}`);
 }
 catch(e) {
-    console.error("No such luck accessing private data.", e);
+    console.error("No such luck accessing private data.");
 }
 
 const Ex2 = Classic(Ex, {
@@ -63,9 +66,11 @@ const Ex2 = Classic(Ex, {
         }
     },
     [PUBLIC]: {
+        alpha: "ALPHA",
         constructor() {
             this.super();
             console.log("Just created an instance of a subclass of Ex!");
+            this.alpha = 42;
         }
     }
 });
@@ -78,7 +83,7 @@ try {
     console.log(`(private a).fubar = ${a.$fubar}`);
 }
 catch(e) {
-    console.error("No such luck accessing private data.", e);
+    console.error("No such luck accessing private data.");
 }
 
 const Ex3 = Classic({
@@ -111,4 +116,9 @@ const Ex4 = Classic(Ex, {
     }
 });
 
-Ex4.leak(b);
+try {
+    Ex4.leak(b);
+}
+catch(e) {
+    console.error("I didn't know my cousin could slap so hard!");
+}
