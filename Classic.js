@@ -454,7 +454,7 @@ function Classic(base, data) {
     function getInstanceHandler(needSuper) {
         return {
             target: void 0,
-            needSuper,
+            needSuper: !!needSuper,
             get(target, prop, receiver) {
                 let retval;
                 if (prop === SUPER_CALLED) {
@@ -475,11 +475,6 @@ function Classic(base, data) {
                 }
                 finally {
                     delete validateAccess.offset;
-                }
-
-                if ((typeof(retval) === "function") && /_\$\d{4,}\$_/.test(retval.name) && 
-                    (owners.get(target[TARGET] || target) !== TYPEID)) {
-                    retval = new Proxy(retval, this);
                 }
 
                 return retval;
@@ -545,11 +540,6 @@ function Classic(base, data) {
                 return retval;
             },
             apply(target, context, args) {
-                if (this.needsSuper && (target !== context.super))
-                    throw new SyntaxError('Must call "this.super()" before using `this`');
-                else
-                    this.needSuper = false;
-
                 let fn = target[TARGET] || target;
                 this.target = getIdObject(owners.get(fn), context);
                 let retval = Reflect.apply(fn, context, args);
@@ -597,7 +587,8 @@ function Classic(base, data) {
             } 
             else{
                 let instance = Object.create(idProto);
-                retval = ancestor.apply(new Proxy(instance, getInstanceHandler(base !== Object)), args);
+                let needSuper = (base !== Object) && (ancestor !== base);
+                retval = ancestor.apply(new Proxy(instance, getInstanceHandler(needSuper)), args);
                 if (retval === void 0) {
                     retval = instance;
                 }
