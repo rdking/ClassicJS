@@ -24,6 +24,7 @@ const protNameMap = new WeakMap;//Name mapping for the protected members
 const stack = new Stack;        //Function registration used to validate access
 const TARGET = Symbol("Proxy Target"); //Used to retrieve the target from the proxy
 const UNUSED = Symbol();        //Used to ensure that a property isn't found.
+const SUPER_CALLED = Symbol()   //Used to enable normal use of `this`.
 
 /**
  * Generates a stupidly long sequence of random numbers that is likely to never
@@ -449,86 +450,114 @@ function Classic(base, data) {
             return retval;
         }
     };
-    const instanceHandler = {
-        target: void 0,
-        get(target, prop, receiver) {
-            let retval;
 
-            if (this.target && !this.target.hasOwnProperty(prop)) {
-                prop = UNUSED;
-            }
-            
-            try {
-                validateAccess.offset = 1;
-                retval = handler.get(target, prop, receiver);
-            }
-            finally {
-                delete validateAccess.offset;
-            }
+    function getInstanceHandler(needSuper) {
+        return {
+            target: void 0,
+            needSuper,
+            get(target, prop, receiver) {
+                let retval;
+                if (prop === SUPER_CALLED) {
+                    this.needSuper = false;
+                }
+                if (this.needSuper && (prop !== "super") &&
+                    !((typeof(target) === "function") && types.has(target))) {
+                    throw new SyntaxError('Must call "this.super()" before using `this`');
+                }
 
-            if ((typeof(retval) === "function") && /_\$\d{4,}\$_/.test(retval.name) && 
-                (owners.get(target[TARGET] || target) !== TYPEID)) {
-                retval = new Proxy(retval, instanceHandler);
-            }
+                if (this.target && !this.target.hasOwnProperty(prop)) {
+                    prop = UNUSED;
+                }
+                
+                try {
+                    validateAccess.offset = 1;
+                    retval = handler.get(target, prop, receiver);
+                }
+                finally {
+                    delete validateAccess.offset;
+                }
 
-            return retval;
-        },
-        set(target, prop, value, receiver) {
-            /**
-             * The different thing here is that the first idProto object
-             * containing prop as an own property is the one that will
-             * receive the [[Set]] request.
-             */
-            let retval = false;
-            let idProto = getIdObjectWithProp(prop, receiver);
+                if ((typeof(retval) === "function") && /_\$\d{4,}\$_/.test(retval.name) && 
+                    (owners.get(target[TARGET] || target) !== TYPEID)) {
+                    retval = new Proxy(retval, this);
+                }
 
-            try {
-                validateAccess.offset = 1;
-                retval = handler.set(target, prop, value, idProto);
+                return retval;
+            },
+            set(target, prop, value, receiver) {
+                /**
+                 * The different thing here is that the first idProto object
+                 * containing prop as an own property is the one that will
+                 * receive the [[Set]] request.
+                 */
+                let retval = false;
+                let idProto = getIdObjectWithProp(prop, receiver);
+
+                if (this.needSuper && (prop !== "super"))
+                    throw new SyntaxError('Must call "this.super()" before using `this`');
+
+                try {
+                    validateAccess.offset = 1;
+                    retval = handler.set(target, prop, value, idProto);
+                }
+                finally {
+                    delete validateAccess.offset;
+                }
+                return retval;
+            },
+            ownKeys(target) {
+                if (this.needsSuper)
+                    throw new SyntaxError('Must call "this.super()" before using `this`');
+
+                let retval;
+                if (this.target) {
+                    retval = Reflect.ownKeys(this.target);
+                }
+                else {
+                    retval = Reflect.ownKeys(target);
+                }
+                return retval;
+            },
+            has(target, key) {
+                if (this.needsSuper)
+                    throw new SyntaxError('Must call "this.super()" before using `this`');
+
+                let retval;
+                if (this.target) {
+                    retval = Reflect.has(this.target, key);
+                }
+                else {
+                    retval = Reflect.has(target, key);
+                }
+                return retval;
+            },
+            defineProperty(target, prop, desc) {
+                if (this.needsSuper)
+                    throw new SyntaxError('Must call "this.super()" before using `this`');
+
+                let retval;
+                if ((typeof(prop) === "string") && (prop[0] === TRIGGER)) {
+                    throw new SyntaxError(`Use of "${TRIGGER}" disallowed in first character of identifier.`);
+                }
+                else {
+                    retval = Reflect.defineProperty(target, prop, desc);
+                }
+                return retval;
+            },
+            apply(target, context, args) {
+                if (this.needsSuper && (target !== context.super))
+                    throw new SyntaxError('Must call "this.super()" before using `this`');
+                else
+                    this.needSuper = false;
+
+                let fn = target[TARGET] || target;
+                this.target = getIdObject(owners.get(fn), context);
+                let retval = Reflect.apply(fn, context, args);
+                this.target = void 0;
+                return retval;
             }
-            finally {
-                delete validateAccess.offset;
-            }
-            return retval;
-        },
-        ownKeys(target) {
-            let retval;
-            if (this.target) {
-                retval = Reflect.ownKeys(this.target);
-            }
-            else {
-                retval = Reflect.ownKeys(target);
-            }
-            return retval;
-        },
-        has(target, key) {
-            let retval;
-            if (this.target) {
-                retval = Reflect.has(this.target, key);
-            }
-            else {
-                retval = Reflect.has(target, key);
-            }
-            return retval;
-        },
-        defineProperty(target, prop, desc) {
-            let retval;
-            if ((typeof(prop) === "string") && (prop[0] === TRIGGER)) {
-                throw new SyntaxError(`Use of "${TRIGGER}" disallowed in first character of identifier.`);
-            }
-            else {
-                retval = Reflect.defineProperty(target, prop, desc);
-            }
-            return retval;
-        },
-        apply(target, context, args) {
-            let fn = target[TARGET] || target;
-            this.target = getIdObject(owners.get(fn), context);
-            let retval = Reflect.apply(fn, context, args);
-            this.target = void 0;
-            return retval;
-        }
-    };
+        };
+    }
 
     //Handle data conversion for the private and protected members;
     data = convertPrivates(data, stack, TYPEID);
@@ -544,6 +573,7 @@ function Classic(base, data) {
                 super: {
                     configurable: true,
                     value: function(...args) {
+                        this[SUPER_CALLED];
                         return Super(shadow.prototype, this, base, ...args);
                     }
                 }
@@ -553,7 +583,6 @@ function Classic(base, data) {
         let pvtData = Object.create(data[PRIVATE]);
         pvt.set(idProto, pvtData);
         
-        //TODO: Put in initializer runner somewhere below here or in Super.
         if (new.target) {
             if (isNative(ancestor) || (ancestor === base)) {
                 let fake = function() {};
@@ -568,7 +597,7 @@ function Classic(base, data) {
             } 
             else{
                 let instance = Object.create(idProto);
-                retval = ancestor.apply(new Proxy(instance, instanceHandler), args);
+                retval = ancestor.apply(new Proxy(instance, getInstanceHandler(base !== Object)), args);
                 if (retval === void 0) {
                     retval = instance;
                 }
@@ -582,7 +611,7 @@ function Classic(base, data) {
         }
         delete rawIdProto.super;
         
-        return new Proxy(retval, instanceHandler);
+        return new Proxy(retval, getInstanceHandler());
     }
 
     if (!types.has(base)) {
@@ -601,7 +630,7 @@ function Classic(base, data) {
 
     Object.defineProperties(shadow, Object.getOwnPropertyDescriptors(data[STATIC][PUBLIC]));
     Object.defineProperty(shadow, TYPEID, { value: void 0 });
-    shadow = new Proxy(shadow, instanceHandler);
+    shadow = new Proxy(shadow, getInstanceHandler());
     pvt.set(shadow, Object.create(data[STATIC][PRIVATE]));
     protMap.set(shadow, data[STATIC][PROTECTED]);
     
