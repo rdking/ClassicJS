@@ -131,7 +131,6 @@ function convertPrivates(data, stack, TYPEID) {
         pub = {},
         staticPub = {};
 
-
     function convert(dest, src) {
         let keys = Object.getOwnPropertyNames(src).concat(
             Object.getOwnPropertySymbols(src)
@@ -161,6 +160,23 @@ function convertPrivates(data, stack, TYPEID) {
         }
     }
     
+    //Sanity check. Are there unwanted keys?
+    function findOrphans(obj, isStatic) {
+        let keyset = new Set(Object.getOwnPropertyNames(obj).concat(
+            Object.getOwnPropertySymbols(obj)
+        ));
+        keyset.delete(PRIVATE);
+        keyset.delete(PROTECTED);
+        keyset.delete(PUBLIC);
+        !isStatic && keyset.delete(STATIC);
+    
+        if (keyset.size > 0) {
+            throw new SyntaxError(`Found orphan ${isStatic?"static ":""}keys: ${Array.from(keyset)}`);
+        }    
+    }
+    findOrphans(data);
+    findOrphans(data[STATIC], true);
+
     for (let src of [data[PRIVATE], data[PROTECTED]]) {
         convert(pvt, src);
     }

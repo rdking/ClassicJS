@@ -61,8 +61,10 @@ catch(e) {
 
 const Ex2 = Classic(Ex, {
     [STATIC]: {
-        constructor() {
-            console.log("Just created a subclass of Ex!");
+        [PUBLIC]: {
+            constructor() {
+                console.log("Just created a subclass of Ex!");
+            }
         }
     },
     [PUBLIC]: {
