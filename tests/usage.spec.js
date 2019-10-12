@@ -92,6 +92,5 @@ describe("Testing a base class declaration...", () => {
             expect(inst.pvtMember).toBeUndefined();
             expect(() => inst.$pvtMember).toThrow();
         });
-
     });
 });

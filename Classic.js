@@ -42,6 +42,7 @@ function makeFnName() {
   * themselves on first write with the written data.
   * @param {Object} protData - The protected container to convert to accessors.
   * @param {Object} pvtData - The target private container to access.
+  * @returns {Object} - An accessor-only version of the prototype data
   */
 function toAccessors(protData, pvtData) {
     let retval = {};
@@ -65,6 +66,7 @@ function toAccessors(protData, pvtData) {
  * Searches the prototype chain for an object containing the given TYPEID
  * @param {Symbol} TYPEID - ID of the targeted class
  * @param {Object} target - instance who's identifying object must be found
+ * @returns {Object} - The target idObject or null if not found
  */
 function getIdObject(TYPEID, target) {
     let retval = target
@@ -92,7 +94,14 @@ function getIdObjectWithProp(prop, target) {
     return retval || target;
 }
 
-function makePvtName(fn, stack, TYPEID) {
+/**
+ * Wraps fn with a uniquely identifiable function that ensures privileged
+ * member functions can be identified.
+ * @param {function} fn - Target function to wrap
+ * @param {Symbol} TYPEID - Unique ID of the class owning fn
+ * @returns {function} - uniquely named wrapper function
+ */
+function makePvtName(fn, TYPEID) {
     let name = makeFnName();
     let retval = eval(`(function ${name}(...args) {
         stack.push(${name});
@@ -125,6 +134,7 @@ function makePvtName(fn, stack, TYPEID) {
  * members of the target class.
  * @param {WeakMap} stack - Map of all the instance stacks
  * @param {Symbol} TYPEID - ID of the targeted class
+ * @returns {Object} - Returns a processed version of the prototype object.
  */
 function convertPrivates(data, stack, TYPEID) {
     let pvt = {},
@@ -146,15 +156,15 @@ function convertPrivates(data, stack, TYPEID) {
 
             if ("value" in desc) {
                 if (typeof(desc.value) === "function") {
-                    desc.value = makePvtName(desc.value, stack, TYPEID);
+                    desc.value = makePvtName(desc.value, TYPEID);
                 }
             }
             else {
                 if ("get" in desc) {
-                    desc.get = makePvtName(desc.get, stack, TYPEID);
+                    desc.get = makePvtName(desc.get, TYPEID);
                 }
                 if ("set" in desc) {
-                    desc.set = makePvtName(desc.set, stack, TYPEID);
+                    desc.set = makePvtName(desc.set, TYPEID);
                 }
             }
             Object.defineProperty(dest, key, desc);
@@ -166,38 +176,38 @@ function convertPrivates(data, stack, TYPEID) {
         let keyset = new Set(Object.getOwnPropertyNames(obj).concat(
             Object.getOwnPropertySymbols(obj)
         ));
-        keyset.delete(PRIVATE);
-        keyset.delete(PROTECTED);
-        keyset.delete(PUBLIC);
-        !isStatic && keyset.delete(STATIC);
+        keyset.delete(Classic.PRIVATE);
+        keyset.delete(Classic.PROTECTED);
+        keyset.delete(Classic.PUBLIC);
+        !isStatic && keyset.delete(Classic.STATIC);
     
         if (keyset.size > 0) {
             throw new SyntaxError(`Found orphan ${isStatic?"static ":""}keys: ${Array.from(keyset)}`);
         }    
     }
     findOrphans(data);
-    findOrphans(data[STATIC], true);
+    findOrphans(data[Classic.STATIC], true);
 
-    for (let src of [data[PRIVATE], data[PROTECTED]]) {
+    for (let src of [data[Classic.PRIVATE], data[Classic.PROTECTED]]) {
         convert(pvt, src);
     }
-    convert(pub, data[PUBLIC]);
+    convert(pub, data[Classic.PUBLIC]);
 
-    for (let src of [data[STATIC][PRIVATE], data[STATIC][PROTECTED]]) {
+    for (let src of [data[Classic.STATIC][Classic.PRIVATE], data[Classic.STATIC][Classic.PROTECTED]]) {
         convert(staticPvt, src);
     }
-    convert(staticPub, data[STATIC][PUBLIC]);
+    convert(staticPub, data[Classic.STATIC][Classic.PUBLIC]);
 
     return {
         //If it's not public, it's private...
-        [PRIVATE]: pvt,
+        [Classic.PRIVATE]: pvt,
         // but, if it's protected, it can be shared.
-        [PROTECTED]: toAccessors(data[PROTECTED], data[PRIVATE]),
-        [PUBLIC]: pub,
-        [STATIC]: {
-            [PRIVATE]: staticPvt,
-            [PROTECTED]: toAccessors(data[STATIC][PROTECTED], data[STATIC][PRIVATE]),
-            [PUBLIC]: staticPub,
+        [Classic.PROTECTED]: toAccessors(data[Classic.PROTECTED], data[Classic.PRIVATE]),
+        [Classic.PUBLIC]: pub,
+        [Classic.STATIC]: {
+            [Classic.PRIVATE]: staticPvt,
+            [Classic.PROTECTED]: toAccessors(data[Classic.STATIC][Classic.PROTECTED], data[Classic.STATIC][Classic.PRIVATE]),
+            [Classic.PUBLIC]: staticPub,
         }
     };
 }
@@ -255,12 +265,27 @@ function validateAccess(stack) {
     return owners.get(fn);
 }
 
+/**
+ * Checks to see if the passed function is a native function. It's more of a
+ * quick guess than a certainty, but it's good enough to avoid getting fooled
+ * by the average "bind" usage.
+ * @param {function} fn - Any function.
+ * @returns {boolean}
+ */
 function isNative(fn) {
     return (typeof(fn) === "function") &&
            fn.hasOwnProperty("prototype") &&
            fn.toString().includes("[native code]");
 }
-
+/**
+ * The super constructor-calling function.
+ * @param {Object} memberProto - Prototype of the child class to be initialized
+ * onto the instance's idProto.
+ * @param {*} inst - The instance object for the class being constructed
+ * @param {*} base - The superclass that needs to be initialized
+ * @param  {...any} args - Arguments to the superclass constructor
+ * @returns {any} - the result of initializing the superclass
+ */
 function Super(memberProto, inst, base, ...args) {
     let idProto = Object.getPrototypeOf(inst);
     let newTarget = function() {},
@@ -294,7 +319,7 @@ function Super(memberProto, inst, base, ...args) {
  * @param {Object} data - The data to be adjusted. 
  */
 function fixupData(data) {
-    let a = new Set([STATIC, PRIVATE, PROTECTED, PUBLIC]);
+    let a = new Set([Classic.STATIC, Classic.PRIVATE, Classic.PROTECTED, Classic.PUBLIC]);
     a.forEach((entry) => {
         if (data.hasOwnProperty(entry)) {
             let item = data[entry];
@@ -306,19 +331,26 @@ function fixupData(data) {
         }
     });
 
-    a.delete(STATIC);
+    a.delete(Classic.STATIC);
     a.forEach((entry) => {
-        if (data[STATIC].hasOwnProperty(entry)) {
-            let item = data[STATIC][entry];
+        if (data[Classic.STATIC].hasOwnProperty(entry)) {
+            let item = data[Classic.STATIC][entry];
             if (item && (typeof(item) !== "object"))
-                throw new TypeError(`Expected property "data[STATIC].${entry}" to be an object.`);
+                throw new TypeError(`Expected property "data[Classic.STATIC].${entry}" to be an object.`);
         }
         else {
-            data[STATIC][entry] = {};
+            data[Classic.STATIC][entry] = {};
         }
     });
 }
 
+/**
+ * Finds and runs all initializers associated with the prototype. It stores the
+ * returned values on the instance object.
+ * @param {Object} inst - the object to run initializers against
+ * @param {Object} mProto - the prototype containing properties with values
+ * that are initializer keys
+ */
 function runInitializers(inst, mProto) {
     let keys = Object.getOwnPropertyNames(mProto).concat(
         Object.getOwnPropertySymbols(mProto)
@@ -348,6 +380,28 @@ function runInitializers(inst, mProto) {
  * @param {DataSpec} data - Object describing the data that will exist on the
  * prototype and it's corresponding privileges.
  * @returns {function} - The constructor for the newly defined class. 
+ * 
+ * @property {string} PrivateAccessSpecifier - Used to set the identifier
+ * character that is used to access non-public members. Can be either '$' or
+ * '_'. Defaults to '$'.
+ * @property {boolean} UseStrings - If set to true, the data parameter can use
+ * the strings "public", "protected", "private", & "static" to define the
+ * sections instead of their symbolic counterparts. Defaults to false.
+ * @property {function} init - Used to defer property assignment until an
+ * instance is created. Causes each instance to receive a unique copy unless
+ * the function is crafted to return the same value each call.
+ * @property {function} getInitValue - Used to retrieve an initialization value
+ * for a prototype property that was initialized with `Classic.init`.
+ * @property {Symbol} PLACEHOLDER - Used to identify prototype properties that
+ * were created with `Classic.init` and can be used with `Classic.getInitValue`.
+ * @property {Symbol|string} STATIC - Used to specify properties belonging to
+ * the constructor function. Can only contain the other 3 section constants.
+ * @property {Symbol|string} PRIVATE - Used to specify properties that will only
+ * be accessible by the declaring class.
+ * @property {Symbol|string} PROTECTED - Used to specify properties that will be
+ * accessible to the declaring class and its descendants.
+ * @property {Symbol|string} PUBLIC - Used to specify properties that will be
+ * openly accessible.
  */
 function Classic(base, data) {
     switch (arguments.length) {
@@ -571,7 +625,7 @@ function Classic(base, data) {
             }),
             idProto = new Proxy(rawIdProto, handler);
 
-        let pvtData = Object.create(data[PRIVATE]);
+        let pvtData = Object.create(data[Classic.PRIVATE]);
         pvt.set(idProto, pvtData);
         
         if (new.target) {
@@ -584,7 +638,7 @@ function Classic(base, data) {
                     Object.defineProperty(retval, baseTypeId, { value: void 0 });
                 }
                 runInitializers(idProto, shadow.prototype);
-                runInitializers(pvtData, data[PRIVATE]);
+                runInitializers(pvtData, data[Classic.PRIVATE]);
             } 
             else{
                 let instance = Object.create(idProto);
@@ -612,40 +666,40 @@ function Classic(base, data) {
 
     types.set(shadow, TYPEID);
 
-    shadow.prototype = Object.create(base.prototype, Object.getOwnPropertyDescriptors(data[PUBLIC]));
-    protMap.set(shadow.prototype, data[PROTECTED]);
+    shadow.prototype = Object.create(base.prototype, Object.getOwnPropertyDescriptors(data[Classic.PUBLIC]));
+    protMap.set(shadow.prototype, data[Classic.PROTECTED]);
     Object.setPrototypeOf(shadow, base);
 
     if (shadow.prototype.hasOwnProperty("constructor")) {
         Object.setPrototypeOf(shadow.prototype.constructor, base);
     }
 
-    Object.defineProperties(shadow, Object.getOwnPropertyDescriptors(data[STATIC][PUBLIC]));
+    Object.defineProperties(shadow, Object.getOwnPropertyDescriptors(data[Classic.STATIC][Classic.PUBLIC]));
     Object.defineProperty(shadow, TYPEID, { value: void 0 });
     shadow = new Proxy(shadow, getInstanceHandler());
-    pvt.set(shadow, Object.create(data[STATIC][PRIVATE]));
-    protMap.set(shadow, data[STATIC][PROTECTED]);
+    pvt.set(shadow, Object.create(data[Classic.STATIC][Classic.PRIVATE]));
+    protMap.set(shadow, data[Classic.STATIC][Classic.PROTECTED]);
     
     let inheritance = getInheritance(base.prototype, TYPEID);
     if (inheritance) {
-        Object.setPrototypeOf(data[PROTECTED], inheritance.data);
-        Object.setPrototypeOf(data[PRIVATE], inheritance.data);
+        Object.setPrototypeOf(data[Classic.PROTECTED], inheritance.data);
+        Object.setPrototypeOf(data[Classic.PRIVATE], inheritance.data);
         protNameMap.set(base.prototype, inheritance.map);
     }
     inheritance = getInheritance(base, TYPEID);
     if (inheritance) {
-        Object.setPrototypeOf(data[STATIC][PROTECTED], inheritance.data);
-        Object.setPrototypeOf(data[STATIC][PRIVATE], inheritance.data);
+        Object.setPrototypeOf(data[Classic.STATIC][Classic.PROTECTED], inheritance.data);
+        Object.setPrototypeOf(data[Classic.STATIC][Classic.PRIVATE], inheritance.data);
         protNameMap.set(base, inheritance.map);
     }
 
-    Object.seal(data[PRIVATE]);
-    Object.seal(data[PROTECTED]);
-    Object.seal(data[STATIC][PRIVATE]);
-    Object.seal(data[STATIC][PROTECTED]);
+    Object.seal(data[Classic.PRIVATE]);
+    Object.seal(data[Classic.PROTECTED]);
+    Object.seal(data[Classic.STATIC][Classic.PRIVATE]);
+    Object.seal(data[Classic.STATIC][Classic.PROTECTED]);
 
-    if (data[STATIC][PUBLIC].hasOwnProperty("constructor")) {
-        data[STATIC][PUBLIC].constructor.call(shadow);
+    if (data[Classic.STATIC][Classic.PUBLIC].hasOwnProperty("constructor")) {
+        data[Classic.STATIC][Classic.PUBLIC].constructor.call(shadow);
     }
 
     return shadow;
@@ -672,6 +726,9 @@ Object.defineProperties(Classic, {
             }
         }
     },
+    /**
+     * 
+     */
     UseStrings: {
         enumerable: true,
         get() { return useStrings; },
@@ -715,7 +772,5 @@ Object.defineProperties(Classic, {
         }
     }
 }); 
-
-const { STATIC, PRIVATE, PROTECTED, PUBLIC } = Classic;
 
 module.exports = Classic;

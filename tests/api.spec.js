@@ -1,10 +1,4 @@
 let Classic = require("../Classic");
-const {
-    STATIC, PRIVATE, PROTECTED, PUBLIC, PLACEHOLDER, getInitValue
-} = Classic;
-const INIT = Classic.init;
-
-let Base, Child, GrandChild;
 
 describe("Testing ClassicJS Syntax...", () => {
     describe("API Presence Checks...", () => {
@@ -85,6 +79,46 @@ describe("Testing ClassicJS Syntax...", () => {
                 expect(typeof(Classic.PRIVATE)).toBe("symbol");
                 expect(typeof(Classic.PROTECTED)).toBe("symbol");
                 expect(typeof(Classic.PUBLIC)).toBe("symbol");
+            });
+        });
+    });
+    describe("Helper Function Checks:", () => {
+        beforeAll(() => {
+            let initted;
+            let returned, returned2;
+        });
+        describe("Classic.init", () => {
+            test("returns an object", () => {
+                expect(() => { initted = Classic.init(() => {})}).not.toThrow();
+                expect(initted).not.toBeNull();
+                expect(typeof(initted)).toBe("object");
+            });
+            test("returns an immutable value", () => {
+                expect(Object.isExtensible(initted)).toBeFalsy();
+            });
+            test("returns a value with the Classic.PLACEHOLDER key set undefined", () => {
+                expect(initted.hasOwnProperty(Classic.PLACEHOLDER)).toBe(true);
+                expect(initted[Classic.PLACEHOLDER]).toBeUndefined();
+                expect(delete initted[Classic.PLACEHOLDER]).toBeFalsy();
+            });
+        });
+        describe("Classic.getInitValue", () => {
+            test("returns a copy of whatever is bound with Classic.init", () => {
+                expect(() => { initted = Classic.init(() => ({ data: 42 }))}).not.toThrow();
+                expect(() => { returned = Classic.getInitValue(initted); }).not.toThrow();
+                expect(typeof(returned)).toBe("object");
+                expect(returned.data).toBe(42);
+            });
+            test("returns undefined when given an invalid object", () => {
+                expect(Classic.getInitValue({})).toBeUndefined();
+                expect(Classic.getInitValue(42)).toBeUndefined();
+            });
+            test("returns unique copies under the simple case", () => {
+                expect(() => { returned2 = Classic.getInitValue(initted); }).not.toThrow();
+                expect(typeof(returned2)).toBe("object");
+                expect(returned2.data).toBe(42);
+                expect(returned).toEqual(returned2);
+                expect(returned).not.toBe(returned2);
             });
         });
     });
