@@ -8,7 +8,17 @@
             "type": "node",
             "request": "launch",
             "name": "Launch Program",
-            "program": "${workspaceFolder}/test/test.Classic.js"
+            "program": "${workspaceFolder}/demo/demo.Classic.js"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Jest Tests",
+            "program": "${workspaceRoot}/node_modules/jest/bin/jest.js",
+            "args": [
+                "-i"
+            ],
+            "internalConsoleOptions": "openOnSessionStart"
         }
     ]
 }

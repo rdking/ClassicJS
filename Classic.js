@@ -266,7 +266,7 @@ function Super(memberProto, inst, base, ...args) {
     let newTarget = function() {},
         proto = Object.getPrototypeOf(idProto);
         pvtData = pvt.get(idProto) || {};
-    if (proto === inst.constructor.prototype) {
+    if (inst && inst.constructor && (proto === inst.constructor.prototype)) {
         newTarget = inst.constructor;
     }
     else {
@@ -343,10 +343,11 @@ function runInitializers(inst, mProto) {
 /**
  * Produces an extendable function to be used as the base class for another
  * class. This allows a new class to contain prototype-based data while also
- * maintaining privilege levels that can funcm,,tion even inside a Proxy
- * @param {function} base - Base class constructor to used. Defaults to Object.
+ * maintaining privilege levels that work properly even inside a Proxy.
+ * @param {function?} base - Base class constructor to used. Defaults to Object.
  * @param {DataSpec} data - Object describing the data that will exist on the
  * prototype and it's corresponding privileges.
+ * @returns {function} - The constructor for the newly defined class. 
  */
 function Classic(base, data) {
     switch (arguments.length) {

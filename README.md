@@ -79,6 +79,8 @@ If you want to extend another `class`, constructor `function`, or native type, j
 const Ex3 = Classic(String, {...});
 ```
 
+The object you pass to `Classic` will be used to create a prototype for the new class. So you can think of it effectively as the prototype. However, the actual prototype produced will not be assignment compatible with this object. With the change of a boolean option, the keys used for the prototype object can switch between being a symbol or the more common strings (`PRIVATE === "private"`). All keys are optional, but you can only place properties under these keys. ClassicJS throws an error if it finds an out-of-place entry.
+
 ### Structure:
 Normally, when using ES6 classes, every instance created looks something like this:
 

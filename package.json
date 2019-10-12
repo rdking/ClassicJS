@@ -7,7 +7,7 @@
     "test": "test"
   },
   "scripts": {
-    "test": "mocha"
+    "test": "jest"
   },
   "repository": {
     "type": "git",
@@ -27,5 +27,9 @@
   "bugs": {
     "url": "https://github.com/rdking/ClassicJS/issues"
   },
-  "homepage": "https://github.com/rdking/ClassicJS#readme"
+  "homepage": "https://github.com/rdking/ClassicJS#readme",
+  "dependencies": {},
+  "devDependencies": {
+    "jest": "^24.9.0"
+  }
 }
