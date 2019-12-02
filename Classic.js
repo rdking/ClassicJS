@@ -535,20 +535,14 @@ function Classic(base, data) {
                 return retval;
             },
             set(target, prop, value, receiver) {
-                /**
-                 * The different thing here is that the first idProto object
-                 * containing prop as an own property is the one that will
-                 * receive the [[Set]] request.
-                 */
                 let retval = false;
-                let idProto = getIdObjectWithProp(prop, receiver);
 
                 if (this.needSuper && (prop !== "super"))
                     throw new SyntaxError('Must call "this.super()" before using `this`');
 
                 try {
                     validateAccess.offset = 1;
-                    retval = handler.set(target, prop, value, idProto);
+                    retval = handler.set(target, prop, value, receiver);
                 }
                 finally {
                     delete validateAccess.offset;
@@ -665,7 +659,14 @@ function Classic(base, data) {
     }
 
     types.set(shadow, TYPEID);
-
+    Object.defineProperty(shadow, Symbol.hasInstance, {
+        enumerable: true,
+        value: function(instance) {
+            let target = this[TARGET];
+            return (types.has(target) && !!getIdObject(types.get(target), instance));
+        }
+    });
+    
     shadow.prototype = Object.create(base.prototype, Object.getOwnPropertyDescriptors(data[Classic.PUBLIC]));
     protMap.set(shadow.prototype, data[Classic.PROTECTED]);
     Object.setPrototypeOf(shadow, base);

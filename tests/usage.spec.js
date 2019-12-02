@@ -6,62 +6,61 @@ const INIT = Classic.init;
 
 let Base, Child, GrandChild;
 
-describe("Testing a base class declaration...", () => {
-    describe("The Happy Path...", () => {
-        beforeAll(() => {
-            Base = Classic({
-                [STATIC]: {
-                    [PRIVATE]: {
-                        pvtMember: 21
-                    },
-                    [PROTECTED]: {
-                        ptdMember: Math.PI * 2
-                    },
-                    [PUBLIC]: {
-                        pubMember: Symbol("static data"),
-                        getData() {
-                            return {
-                                pvtMember: this.$pvtMember,
-                                ptdMember: this.$ptdMember,
-                                pubMember: this.pubMember
-                            }
-                        }
-                    }
-                },
+describe("Testing a class declaration...", () => {
+    beforeAll(() => {
+        Base = Classic({
+            [STATIC]: {
                 [PRIVATE]: {
-                    pvtMember: 42
+                    pvtMember: 21
                 },
                 [PROTECTED]: {
-                    ptdMember: Math.PI
+                    ptdMember: Math.PI * 2
                 },
                 [PUBLIC]: {
-                    pubMember: Symbol("instance data"),
-                    pubObjMember: INIT(() => ({ random: Math.random() * Number.MAX_SAFE_INTEGER})),
+                    pubMember: Symbol("static data"),
                     getData() {
                         return {
                             pvtMember: this.$pvtMember,
                             ptdMember: this.$ptdMember,
-                            pubMember: this.pubMember,
-                            pubObjMember: this.pubObjMember
+                            pubMember: this.pubMember
                         }
                     }
                 }
-            });
+            },
+            [PRIVATE]: {
+                pvtMember: 42
+            },
+            [PROTECTED]: {
+                ptdMember: Math.PI
+            },
+            [PUBLIC]: {
+                pubMember: Symbol("instance data"),
+                pubObjMember: INIT(() => ({ random: Math.random() * Number.MAX_SAFE_INTEGER})),
+                getData() {
+                    return {
+                        pvtMember: this.$pvtMember,
+                        ptdMember: this.$ptdMember,
+                        pubMember: this.pubMember,
+                        pubObjMember: this.pubObjMember
+                    }
+                }
+            }
         });
-
-        describe("Static members", () => {
-            test('Can see public static members', () => {
+    });
+    describe("Static", () => {
+        describe("Public members", () => {
+            test('are accessible', () => {
                 expect(Base).toHaveProperty("pubMember");
                 expect(Base).toHaveProperty("getData");
             });
     
-            test('Can call public static methods', () => {
+            test('can call if they are methods', () => {
                 expect(typeof(Base.getData)).toBe("function");
                 expect(typeof(Base.getData())).toBe("object");
                 expect(typeof(Base.getData())).not.toBeNull();
             });
     
-            test('Can use public static method to read private static data', () => {
+            test('can be used to read non-public static data if they are methods', () => {
                 let data = Base.getData();
                 expect(data.pvtMember).toBe(21);
                 expect(data.ptdMember).toBe(Math.PI * 2);
@@ -69,12 +68,26 @@ describe("Testing a base class declaration...", () => {
                 expect(data.pubMember.toString()).toBe("Symbol(static data)");
             });
         });
-
-        describe("Instance Members", () => {
-            test('Can create valid instances of a type', () => {
-                expect(new Base()).toBeInstanceOf(Base);
-                expect(new Base()).toBeInstanceOf(Object);
+        describe("Protected members", () => {
+            test('cannot be accessed externally', () => {
+                expect(Base.ptdMember).toBeUndefined();
+                expect(() => Base.$ptdMember).toThrow();
             });
+        });
+        describe("Private members", () => {
+            test('cannot be accessed externally', () => {
+                expect(Base.pvtMember).toBeUndefined();
+                expect(() => Base.$pvtMember).toThrow();
+            });
+        });
+    });
+
+    describe("Instance Members", () => {
+        test('can be created', () => {
+            expect(new Base()).toBeInstanceOf(Base);
+            expect(new Base()).toBeInstanceOf(Object);
+        });
+        describe('', () => {
             test('Can create instances with unique properties', () => {
                 let a = new Base();
                 let b = new Base();

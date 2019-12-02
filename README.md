@@ -104,17 +104,13 @@ With ClassicJS, things work a little differently. In an attempt to emulate the n
 }
 ```
 
-Given the usual copy-on-write behavior of prototypes, this must seem like a curious thing do to. Well, remember when I spoke about the requirements of native class functions? Doing things this way allows us to gain 3 important behaviors, 2 of which solve the native class object problem:
+Given the usual copy-on-write behavior of prototypes, this must seem like a curious thing do to. Well, remember when I spoke about the requirements of native class functions? Doing things this way allows us to gain 2 important behaviors, both of which help solve the native class object problem:
 
 1. _**Class-Specific Instancing**_ - This behavior creates and initializes an instance object for each ancestor class in the prototype chain.
 
 This is the core feature that lets us have classes that work more like they do in compiled languages. The next 2 behaviors are only possible because of this behavior. Without this feature, it would not be possible to implement something like fields while still preserving the promises of inheritance. This feature is also what allows us to use Proxy in conjunction with private data despite the WeakMap-based implementation.
 
-2. _**Data Isolation**_ - This is something completely new. This behavior persistently assigns property changes to the ancestor instance of the current instance that contains the nearest definition for the property.
-
-This means that if a property key already exists, changes will be directly assigned to the owning ancestor instance instead of creating a new value on the topmost instance. While peculiar in ES, this feature allows class instances to work properly under all circumstances without any suprising side effects on class inheritance.
-
-3. _**Initializer Changes Via The Prototype**_ - This behavior preserves the notion of being able to change the prototype to alter the default values that will be associated with each instance.
+2. _**Initializer Changes Via The Prototype**_ - This behavior preserves the notion of being able to change the prototype to alter the default values that will be associated with each instance.
 
 Take the following code for example:
 ```js
@@ -126,7 +122,7 @@ const Ex = Classic({
     obj: INIT(() => ({ a: 1 }));
 });
 ```
-When instantiated, you'll get an instance of `Ex` with a single property `obj` having a unique copy of an object matching `{ a: 1 }`. Every new instance will receive its own copy. However, if you looked at `Ex.prototype.obj`, all you'd find is a non-extensible object that looks like `{}`. That object can be recognized via the 1 property it has: namely `PLACEHOLDER in Ex.prototype.obj === true`. 
+When instantiated, you'll get an instance of `Ex` with a single property `obj` having a unique copy of an object matching `{ a: 1 }`. Every new instance will receive its own copy. However, if you looked at `Ex.prototype.obj`, all you'd find is a non-extensible object that looks like `{}`. That object can be recognized via the 1 property it has: namely `("PLACEHOLDER" in Ex.prototype.obj) === true`. 
 
 With this, you can identify which prototype properties have initializers. If you want a copy of the data that might get stored on an instance, you can do this:
 ```js
@@ -139,13 +135,13 @@ Ex.prototype.obj = INIT(() => { a: 42 });
 The change will take effect on the next fetch of the initial value. Each new instance created after this will receive an instance copy of the new object.
 
 ### Foot-gun Avoidance:
-I know, you don't want to use something like this because of the foot-gun of objects on the prototype, right? Don't worry. I covered that case too! I added 1 more API just to make this task easier and clear. Take a look:
+The main appeal of instance-based class properties is that they avoid the foot-gun of objects on the prototype. With this library, that issue is easily avoided without having to give up on accesor properties or deep inheritance just by using `Classic.init` as above. Here it is again (aliased as `INIT`).
 
 ```js
 
 const Ex = Classic({
     [PRIVATE]: {
-        object: Classic.init(() => ({ random: ~~(Math.random() * 1000) }))
+        object: INIT(() => ({ random: ~~(Math.random() * 1000) }))
     },
     [PUBLIC]: {
         constructor() {
@@ -155,7 +151,7 @@ const Ex = Classic({
 });
 ```
 
-`Classic.init` registers the function you pass it as an initializer for the property. When the class is instantiated, all such initializers are run to generate the value that will go on the class-specific instance. With this, you can kiss those foot-guns goodbye.
+`Classic.init` registers the function you pass it as an initializer for the property. When the class is instantiated, all such initializers are run to generate the value that will go on the instance. With this, you can kiss those foot-guns goodbye.
 
 ## API
 
