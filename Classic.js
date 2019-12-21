@@ -114,7 +114,7 @@ function makePvtName(fn, TYPEID) {
         toString: {
             configurable: true, 
             writable: true,
-            value: () => fn.toString()
+            value: () => fn.toString
         },
         length: {
             configurable: true,
@@ -160,10 +160,10 @@ function convertPrivates(data, stack, TYPEID) {
                 }
             }
             else {
-                if ("get" in desc) {
+                if (("get" in desc) && desc.get) {
                     desc.get = makePvtName(desc.get, TYPEID);
                 }
-                if ("set" in desc) {
+                if (("set" in desc) && desc.set) {
                     desc.set = makePvtName(desc.set, TYPEID);
                 }
             }
@@ -249,9 +249,10 @@ function getInheritance(obj, TYPEID) {
  * executing function has the right to access private members.
  * @param {Stack} stack - Stack of registered private member functions in this
  * class that are being executed.
+ * @param {Number} offset - Count of extra functions in the call stack.
  * @returns {Symbol?} - The TYPEID for the function that's running or undefined.
  */
-function validateAccess(stack) {
+function validateAccess(stack, offset) {
     let eStack = (new Error).stack.split(/\n/);
     let fn = stack.peek();
 
@@ -259,7 +260,7 @@ function validateAccess(stack) {
     if (eStack[0] === "Error")
         eStack.shift();
 
-    if (!eStack[3 + parseInt(validateAccess.offset || 0)].includes(fn.name))
+    if (!eStack[3 + offset].includes(fn.name))
         throw new SyntaxError(`Invalid private access specifier encountered.`);
 
     return owners.get(fn);
@@ -315,7 +316,8 @@ function Super(memberProto, inst, base, ...args) {
 
 /**
  * Validates the data object and ensures that it meets the minimum requirements
- * to keep from causing errors in this code.
+ * to keep from causing errors in this code. Also ensures that private member
+ * functions are called with an appropriate context object.
  * @param {Object} data - The data to be adjusted. 
  */
 function fixupData(data) {
@@ -362,12 +364,7 @@ function runInitializers(inst, mProto) {
             inst[key] = initFns.get(mProto[key]).call(this);
         }
         else if (isID && (typeof(mProto[key]) !== "function")) {
-            Object.defineProperty(inst, key, {
-                configurable: true,
-                enumerable: true,
-                writable: true,
-                value: mProto[key]
-            });
+            inst[key] = mProto[key];
         }
     }
 }
@@ -437,6 +434,7 @@ function Classic(base, data) {
 
     const TYPEID = Symbol(`base=${base.name}`);
     const handler = {
+        offset: 0,
         get(target, prop, receiver) {
             let retval;
             if (prop === TARGET) {
@@ -447,7 +445,7 @@ function Classic(base, data) {
                  * This is private member request. So the target doesn't matter.
                  * The real target is the prototype object with our TYPEID on it.
                  */
-                let typeId = validateAccess(stack);
+                let typeId = validateAccess(stack, this.offset);
                 let pprop = prop.substr(1);
                 let proto = getIdObject(typeId, Object.getPrototypeOf(receiver));
                 let nameMap = protNameMap.get(base);
@@ -481,7 +479,7 @@ function Classic(base, data) {
                  * This is private member request. So the target doesn't matter.
                  * The real target is the prototype object with our TYPEID on it.
                  */
-                let typeId = validateAccess(stack);
+                let typeId = validateAccess(stack, this.offset);
                 let pprop = prop.substr(1);
                 let proto = getIdObject(typeId, Object.getPrototypeOf(receiver));
 
@@ -489,7 +487,6 @@ function Classic(base, data) {
                     throw new TypeError("Receiver does not contain the requested property.");
                 }
 
-                validateAccess(stack);
                 let ptarget = pvt.get(proto);
                 if (pprop in ptarget) {
                     ptarget[pprop] = value;
@@ -525,11 +522,11 @@ function Classic(base, data) {
                 }
                 
                 try {
-                    validateAccess.offset = 1;
+                    handler.offset = 1;
                     retval = handler.get(target, prop, receiver);
                 }
                 finally {
-                    delete validateAccess.offset;
+                    handler.offset = 0;
                 }
 
                 return retval;
@@ -541,11 +538,11 @@ function Classic(base, data) {
                     throw new SyntaxError('Must call "this.super()" before using `this`');
 
                 try {
-                    validateAccess.offset = 1;
+                    handler.offset = 1;
                     retval = handler.set(target, prop, value, receiver);
                 }
                 finally {
-                    delete validateAccess.offset;
+                    handler.offset = 0;
                 }
                 return retval;
             },
@@ -775,3 +772,4 @@ Object.defineProperties(Classic, {
 }); 
 
 module.exports = Classic;
+console.log("Loaded Classic.js");
