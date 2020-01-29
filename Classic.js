@@ -114,7 +114,7 @@ function makePvtName(fn, TYPEID) {
         toString: {
             configurable: true, 
             writable: true,
-            value: () => fn.toString
+            value: Function.prototype.toString.bind(fn)
         },
         length: {
             configurable: true,
