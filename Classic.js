@@ -610,8 +610,9 @@ function Classic(base, data) {
     //Handle data conversion for the private and protected members;
     data = convertPrivates(data, stack, TYPEID);
 
+    let shadow;
     eval(`
-    let shadow = function ${data[Classic.CLASSNAME]}(...args) {
+    shadow = function ${data[Classic.CLASSNAME]}(...args) {
         let proto = new.target ? new.target.prototype : Object.getPrototypeOf(this);
 
         if ((data.inheritMode === Classic.ABATRACT) && (proto === shadow.prototype)) {
