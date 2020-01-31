@@ -50,9 +50,10 @@ function toAccessors(protData, pvtData) {
 
     for (let key of keys) {
         Object.defineProperty(retval, key, {
-            get() { return pvtData[key]; },
+            get() { return retval[key]; },
             set(v) {
-                Object.defineProperty(this, key, { 
+                Object.defineProperty(this, key, {
+                    configurable: true,
                     writable: true,
                     value: v 
                 });
