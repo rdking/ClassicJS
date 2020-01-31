@@ -179,6 +179,8 @@ function convertPrivates(data, stack, TYPEID) {
         keyset.delete(Classic.PRIVATE);
         keyset.delete(Classic.PROTECTED);
         keyset.delete(Classic.PUBLIC);
+        keyset.delete(Classic.CLASSNAME);
+        keyset.delete(Classic.INHERITMODE);
         !isStatic && keyset.delete(Classic.STATIC);
     
         if (keyset.size > 0) {
@@ -323,8 +325,10 @@ function Super(memberProto, inst, base, ...args) {
 function fixupData(data) {
     let a = new Set([Classic.STATIC, Classic.PRIVATE, Classic.PROTECTED, Classic.PUBLIC]);
 
-    data.className = data.ClassName || "ClassBase";
-    data.inheritMode = ["abstract", "final", undefined].includes(data.inheritMode) ? data.inheritMode: undefined;
+    data[Classic.CLASSNAME] = [Classic.CLASSNAME] || "ClassBase";
+    data[Classic.INHERITMODE] = [Classic.ABSTRACT, Classic.FINAL, undefined].includes(data[Classic.INHERITMODE]) 
+        ? data[Classic.INHERITMODE]
+        : undefined;
 
     a.forEach((entry) => {
         if (data.hasOwnProperty(entry)) {
@@ -607,7 +611,7 @@ function Classic(base, data) {
     data = convertPrivates(data, stack, TYPEID);
 
     eval(`
-    let shadow = function ${data.className}(...args) {
+    let shadow = function ${data[Classic.CLASSNAME]}(...args) {
         let proto = new.target ? new.target.prototype : Object.getPrototypeOf(this),
 
         if ((data.inheritMode === Classic.ABATRACT) && (proto === shadow.prototype)) {
@@ -728,6 +732,11 @@ const AccessLevels = {
     Static: Symbol("ClassicJS::STATIC")
 };
 
+const ClassConfigKeys = {
+    ClassName: Symbol("ClassicJS::CLASSNAME"),
+    InheritMode: Symbol("ClassicJS::INHERITMODE")
+};
+
 Object.defineProperties(Classic, {
     PrivateAccessSpecifier: {
         enumerable: true,
@@ -765,6 +774,14 @@ Object.defineProperties(Classic, {
     PUBLIC: {
         enumerable: true,
         get() { return useStrings ? "public" : AccessLevels.Public; }
+    },
+    CLASSNAME: {
+        enumerable: true,
+        get() { return useStrings ? "className" : ClassConfigKeys.CLASSNAME; }
+    },
+    INHERITMODE: {
+        enumerable: true,
+        get() { return useStrings ? "inheritMode" : ClassConfigKeys.INHERITMODE; }
     },
     PLACEHOLDER: {
         enumerable: true,
