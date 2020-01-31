@@ -436,7 +436,7 @@ function Classic(base, data) {
     //Make sure data is kosher.
     fixupData(data);
 
-    if (types.has(base) && (types.get(base).mode === "final")) {
+    if (types.has(base) && (types.get(base).mode === Classic.FINAL)) {
         throw new TypeError("Cannot extend a final class.");
     }
 
@@ -610,10 +610,10 @@ function Classic(base, data) {
     let shadow = function ${data.className}(...args) {
         let proto = new.target ? new.target.prototype : Object.getPrototypeOf(this),
 
-        if ((data.inheritMode === "abstract") && (proto === shadow.prototype)) {
+        if ((data.inheritMode === Classic.ABATRACT) && (proto === shadow.prototype)) {
             throw new TypeError("Cannot instantiate an abstract class.");
         }
-        else if ((data.inheritMode === final) && (proto !== shadow.protoype)) {
+        else if ((data.inheritMode === Classic.FINAL) && (proto !== shadow.protoype)) {
             throw new TypeError("Cannot extend a final class.");
         }
 
@@ -769,6 +769,14 @@ Object.defineProperties(Classic, {
     PLACEHOLDER: {
         enumerable: true,
         value: Symbol(`Initializer PlaceHolder`)
+    },
+    ABSTRACT: {
+        enumerable: true,
+        value: Symbol(`Abstract Class`)
+    },
+    FINAL: {
+        enumerable: true,
+        value: Symbol(`Final`)
     },
     init: {
         enumerable: true,
