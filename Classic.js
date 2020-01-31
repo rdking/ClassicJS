@@ -612,7 +612,7 @@ function Classic(base, data) {
 
     eval(`
     let shadow = function ${data[Classic.CLASSNAME]}(...args) {
-        let proto = new.target ? new.target.prototype : Object.getPrototypeOf(this),
+        let proto = new.target ? new.target.prototype : Object.getPrototypeOf(this);
 
         if ((data.inheritMode === Classic.ABATRACT) && (proto === shadow.prototype)) {
             throw new TypeError("Cannot instantiate an abstract class.");
