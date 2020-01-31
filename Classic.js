@@ -302,7 +302,7 @@ function Super(memberProto, inst, base, ...args) {
     let newInst = Reflect.construct(base, args, newTarget);
     Object.setPrototypeOf(idProto, newInst);
     if (Object.isExtensible(newInst) && types.has(base)) {
-        let typeId = types.get(base);
+        let typeId = types.get(base).id;
         if (!newInst.hasOwnProperty(typeId)) {
             Object.defineProperty(newInst, typeId, { value: void 0 });
             if (!pvt.has(newInst))
@@ -322,6 +322,10 @@ function Super(memberProto, inst, base, ...args) {
  */
 function fixupData(data) {
     let a = new Set([Classic.STATIC, Classic.PRIVATE, Classic.PROTECTED, Classic.PUBLIC]);
+
+    data.className = data.ClassName || "ClassBase";
+    data.inheritMode = ["abstract", "final", undefined].includes(data.inheritMode) ? data.inheritMode: undefined;
+
     a.forEach((entry) => {
         if (data.hasOwnProperty(entry)) {
             let item = data[entry];
@@ -431,6 +435,10 @@ function Classic(base, data) {
 
     //Make sure data is kosher.
     fixupData(data);
+
+    if (types.has(base) && (types.get(base).mode === "final")) {
+        throw new TypeError("Cannot extend a final class.");
+    }
 
     const TYPEID = Symbol(`base=${base.name}`);
     const handler = {
@@ -598,11 +606,20 @@ function Classic(base, data) {
     //Handle data conversion for the private and protected members;
     data = convertPrivates(data, stack, TYPEID);
 
-    let shadow = function ClassBase(...args) {
+    eval(`
+    let shadow = function ${data.className}(...args) {
+        let proto = new.target ? new.target.prototype : Object.getPrototypeOf(this),
+
+        if ((data.inheritMode === "abstract") && (proto === shadow.prototype)) {
+            throw new TypeError("Cannot instantiate an abstract class.");
+        }
+        else if ((data.inheritMode === final) && (proto !== shadow.protoype)) {
+            throw new TypeError("Cannot extend a final class.");
+        }
+
         let hasCtor = shadow.prototype.hasOwnProperty("constructor");
         let retval, 
-            baseTypeId = types.get(base),
-            proto = new.target ? new.target.prototype : Object.getPrototypeOf(this),
+            baseTypeId = types.get(base).id,
             ancestor = hasCtor ? shadow.prototype.constructor : base,
             rawIdProto = Object.create(proto, {
                 [TYPEID]: { value: void 0 },
@@ -650,17 +667,18 @@ function Classic(base, data) {
         
         return new Proxy(retval, getInstanceHandler());
     }
+   `);
 
     if (!types.has(base)) {
-        types.set(base, Symbol(base.name));
+        types.set(base, {id: Symbol(base.name)});
     }
 
-    types.set(shadow, TYPEID);
+    types.set(shadow, {id: TYPEID, mode: data.inheritMode});
     Object.defineProperty(shadow, Symbol.hasInstance, {
         enumerable: true,
         value: function(instance) {
             let target = this[TARGET];
-            return (types.has(target) && !!getIdObject(types.get(target), instance));
+            return (types.has(target) && !!getIdObject(types.get(target).id, instance));
         }
     });
     
