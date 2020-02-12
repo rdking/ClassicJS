@@ -17,27 +17,45 @@ class Stack extends Array {
  * This is a proxy that allows it's target to be altered.
  */
 class FlexibleProxy {
-    constructor(target, needSuper, SUPER_CALLED) {
-        return new Proxy(target, {
-            current: target,
+    constructor(instance, newTarget, needSuper) {
+        return new Proxy(instance, {
+            current: instance,
             get(tgt, prop, receiver) {
-                if (needSuper && ![FlexibleProxy.TARGET, "super", SUPER_CALLED, NEW_TARGET].includes(prop)) {
-                    throw new SyntaxError("Cannot use 'this' before calling super.")
+                let retval;
+                switch (prop) {
+                    case NEW_TARGET:
+                        retval = newTarget;
+                        break;
+                    case FlexibleProxy.TARGET:
+                        retval = this.current;
+                        break;
+                    case SUPER_CALLED:
+                        needSuper = false;
+                    default:
+                        if ((prop === "super") || !needSuper) {
+                            retval = Reflect.get(this.current, prop, receiver);
+                        }
+                        else {
+                            throw new SyntaxError("Cannot use 'this' before calling super.")
+                        }
+                        break;
                 }
-                return (prop === FlexibleProxy.TARGET)
-                    ? this.current
-                    : Reflect.get(this.current, prop, receiver);
+                return retval;
             },
             set(tgt, prop, value, receiver) {
-                if (needSuper && ![FlexibleProxy.TARGET, "super", SUPER_CALLED, NEW_TARGET].includes(prop)) {
-                    throw new SyntaxError("Cannot use 'this' before calling super.")
-                }
                 let retval = true;
-                if (prop === FlexibleProxy.TARGET) {
-                    this.current = value;
-                }
-                else {
-                    retval = Reflect.set(this.current, prop, value, receiver);
+                switch (prop) {
+                    case FlexibleProxy.TARGET:
+                        this.current = value;
+                        break;
+                    default:
+                        if ((prop === "super") || !needSuper) {
+                            retval = Reflect.set(this.current, prop, value, receiver);
+                        }
+                        else {
+                            throw new SyntaxError("Cannot use 'this' before calling super.")
+                        }
+                        break;
                 }
                 return retval;
             }
@@ -58,14 +76,13 @@ const pvt = new WeakMap;        //Private data for each instance
 const protMap = new WeakMap;    //Inheritable objects from each class
 const types = new WeakMap;      //Map of constructors and their TYPEIDs
 const initFns = new WeakMap;    //Map of initialization functions
-const protNameMap = new WeakMap;//Name mapping for the protected members
 const proxyMap = new WeakMap;   //Map of instances to privileged instances
 const stack = new Stack;        //Function registration used to validate access
-const TARGET = Symbol("Proxy Target"); //Used to retrieve the target from the proxy
-const UNUSED = Symbol();        //Used to ensure that a property isn't found.
-const SUPER_CALLED = Symbol();  //Used to enable normal use of `this`.
-const NEW_TARGET = Symbol();    //Used to hide the transfer of new.target from the constructor
-const CONSTRUCTOR = Symbol();   //Used to hide the user-implem
+const TARGET = Symbol("Proxy Target");          //Used to retrieve the target from the proxy
+const UNUSED = Symbol("UNUSED");                //Used to ensure that a property isn't found.
+const SUPER_CALLED = Symbol("SUPER_CALLED");    //Used to enable normal use of `this`.
+const NEW_TARGET = Symbol("NEW_TARGET");        //Used to hide the transfer of new.target from the constructor
+const KEYMAP = Symbol("PROTECTED KEYMAP");      //Used to hold the name mapping for inherited protected members.
 
 /**
  * Generates a stupidly long sequence of random numbers that is likely to never
@@ -78,23 +95,42 @@ function makeFnName() {
     return `_$${getBigRandom()}${getBigRandom()}${getBigRandom()}${getBigRandom()}$_`;
 }
 
- /**
-  * Converts the protected prototype into a set of accessors that shadow
-  * themselves on first write with the written data.
-  * @param {Object} source - The container to convert to accessors.
-  * @param {Object} data - The target container to access.
-  * @param {Function?} keydef - Definition of the accessor property. A default one is used if omitted.
-  * @param {Object?} inst - The instance object to modify. A new one is used if omitted.
-  * @returns {Object} - An accessor-only version of the prototype data
-  */
-function toAccessors(source, data, keydef, inst) {
-    let retval = inst || {};
-    let keys = Object.getOwnPropertyNames(source).concat(Object.getOwnPropertySymbols(source));
+/**
+ * Generates a list of names of the protected members while moving the actual
+ * definitions of those protected members into the class private object.
+ * @param {Object} pvtData - Template of the private data object. Will receive
+ * the members of the protData object.
+ * @param {Object} protData - Template of the protected data object. Will be
+ * replaced by an array of names of the protected members.
+ */
+function mapProtected(pvtData, protData) {
+    let retval = {f: {}, r: {}}; //forward & reverse mappings
+    let keys = Object.getOwnPropertyNames(protData).concat(Object.getOwnPropertySymbols(protData));
+    
+    Object.defineProperties(pvtData, Object.getOwnPropertyDescriptors(protData));
 
-    keydef = keydef || (key => ({
+    //Generate a 2-way mapping for the protected keys.
+    for (let key of keys) {
+        retval.f[key] = Symbol(key);
+        retval.r[retval.f[key]] = key;
+    }
+    return retval;
+}
+
+/**
+ * Create a set of accessors that access the private members in data that have
+ * been marked as protected.
+ * @param {Object} data - The target container to access.
+ * @param {Array} keyMap - The map of mangled keys to keys in data.
+ * @returns {Object} - An accessor-only version of the prototype data
+ */
+function toAccessors(data, keyMap) {
+    let retval = {};
+    let rKeyMap = keyMap.r;
+    let keydef = (key => ({
         configurable: true,
         get() {
-            return data[key]; 
+            return data[rKeyMap[key]]; 
         },
         set(v) {
             Object.defineProperty(this, key, {
@@ -105,6 +141,7 @@ function toAccessors(source, data, keydef, inst) {
         }
     }));
 
+    let keys = Object.getOwnPropertySymbols(rKeyMap);
     for (let key of keys) {
         Object.defineProperty(retval, key, keydef(key));
     }
@@ -124,24 +161,6 @@ function getIdObject(TYPEID, target) {
         retval = Object.getPrototypeOf(retval);
     }
     return retval;
-}
-
-/**
- * Searches the prototype chain for an object containing the given property. If
- * the property is not found before reaching the topmost prototype object, the
- * original target is used as the default value.
- * @param {string|Symbol} prop - key of the property we expect
- * @param {Object} target - instance object who's prototypes will be searched
- * @returns {Object} - the found object, or target if no object was found.
- */
-function getIdObjectWithProp(prop, target) {
-    let retval = Object.getPrototypeOf(target);
-
-    while (retval && !(pvt.has(retval) && retval.hasOwnProperty(prop))) {
-        retval = Object.getPrototypeOf(retval);
-    }
-
-    return retval || target;
 }
 
 /**
@@ -185,13 +204,14 @@ function makePvtName(fn, TYPEID) {
  * prototype object.
  * @param {DataSpec} data - The object containing the public data and non-public
  * members of the target class.
- * @param {WeakMap} stack - Map of all the instance stacks
  * @param {Symbol} TYPEID - ID of the targeted class
  * @returns {Object} - Returns a processed version of the prototype object.
  */
-function convertPrivates(data, stack, TYPEID) {
+function convertPrivates(data, TYPEID) {
     let pvt = {},
         staticPvt = {},
+        prot = {},
+        staticProt = {},
         pub = {},
         staticPub = {};
 
@@ -243,25 +263,23 @@ function convertPrivates(data, stack, TYPEID) {
     findOrphans(data);
     findOrphans(data[Classic.STATIC], true);
 
-    for (let src of [data[Classic.PRIVATE], data[Classic.PROTECTED]]) {
-        convert(pvt, src);
-    }
+    prot = mapProtected(data[Classic.PRIVATE], data[Classic.PROTECTED]);
+    staticProt = mapProtected(data[Classic.STATIC][Classic.PRIVATE], data[Classic.STATIC][Classic.PROTECTED]);
+    
+    convert(pvt, data[Classic.PRIVATE]);
     convert(pub, data[Classic.PUBLIC]);
-
-    for (let src of [data[Classic.STATIC][Classic.PRIVATE], data[Classic.STATIC][Classic.PROTECTED]]) {
-        convert(staticPvt, src);
-    }
+    convert(staticPvt, data[Classic.STATIC][Classic.PRIVATE]);
     convert(staticPub, data[Classic.STATIC][Classic.PUBLIC]);
 
     return {
         //If it's not public, it's private...
         [Classic.PRIVATE]: pvt,
         // but, if it's protected, it can be shared.
-        [Classic.PROTECTED]: toAccessors(data[Classic.PROTECTED], data[Classic.PROTECTED]),
+        [Classic.PROTECTED]: prot,
         [Classic.PUBLIC]: pub,
         [Classic.STATIC]: {
             [Classic.PRIVATE]: staticPvt,
-            [Classic.PROTECTED]: toAccessors(data[Classic.STATIC][Classic.PROTECTED], data[Classic.STATIC][Classic.PROTECTED]),
+            [Classic.PROTECTED]: staticProt,
             [Classic.PUBLIC]: staticPub,
         }
     };
@@ -270,33 +288,34 @@ function convertPrivates(data, stack, TYPEID) {
 /**
  * Searches for the inheritance owed the current class in construction based
  * on the prototype of the base class.
- * @param {Object} obj - top of the prototype chain to search for an object
- * with protected properties.
+ * @param {Object} pidObj - ID object for the base class of the requesting class.
+ * @param {Object} baseKey - Object used to retrieve the protected member name list.
  * @returns {Object} containing protected properties and a map of the class-specific names.
  */
-function getInheritance(obj, TYPEID) {
-    while (obj && (!protMap.has(obj) || obj.hasOwnProperty(TYPEID))) {
-        obj = Object.getPrototypeOf(obj);
-    }
-
-    if (obj) {
-        let retval = {
-            map: {},
-            data: {}
-        };
-        let prot = protMap.get(obj);
-        let keys = Object.getOwnPropertyNames(prot).concat(
-            Object.getOwnPropertySymbols(prot)
-        );
-
-        for (let key of keys) {
-            let name = Symbol(key.toString());
-            Object.defineProperty(retval.data, name, Object.getOwnPropertyDescriptor(prot, key));
-            retval.map[key] = name;
+function getInheritance(pidObj, baseKey) {
+    let pvtData = pvt.get(pidObj);
+    let protNames = protMap.get(baseKey);
+    let retval;
+    let hasData = obj => {
+        let retval = false;
+        if (obj) {
+            let keys = Object.getOwnPropertyNames(obj).concat(
+                Object.getOwnPropertySymbols(obj)
+            );
+            retval = !!keys.length;
         }
-
         return retval;
+    };
+
+    if (hasData(pvtData) && protNames && hasData(protNames.f)) {
+        retval = {
+            links: toAccessors(pvtData, protNames),
+            map: protNames
+        };
+        //Inherit any protected members already calculated.
+        Object.setPrototypeOf(retval.links, Object.getPrototypeOf(pvtData));
     }
+    return retval;
 }
 
 /**
@@ -363,8 +382,7 @@ function Super(inst, base, ...args) {
 
 /**
  * Validates the data object and ensures that it meets the minimum requirements
- * to keep from causing errors in this code. Also ensures that private member
- * functions are called with an appropriate context object.
+ * to keep from causing errors in this code.
  * @param {Object} data - The data to be adjusted. 
  */
 function fixupData(data) {
@@ -413,11 +431,17 @@ function runInitializers(inst, mProto) {
     let isID = pvt.has(inst);
 
     for (let key of keys) {
-        if (initFns.has(mProto[key])) {
-            inst[key] = initFns.get(mProto[key]).call(this);
-        }
-        else if (isID && (typeof(mProto[key]) !== "function")) {
-            inst[key] = mProto[key];
+        let def = Object.getOwnPropertyDescriptor(mProto, key);
+        
+        if ("value" in def) {
+            let val = (def) ? def.value : undefined;
+
+            if (initFns.has(val)) {
+                inst[key] = initFns.get(val).call(this);
+            }
+            else if (isID && (typeof(val) !== "function")) {
+                inst[key] = val;
+            }
         }
     }
 }
@@ -492,37 +516,46 @@ function Classic(base, data) {
 
     const TYPEID = Symbol(`${data[Classic.CLASSNAME] || `<anonymous> extends ${base.name}`}`);
     const handler = {
-        offset: 0,
-        get(target, prop, receiver) {
+        privateAccess(prop, receiver, offset) {
+            /**
+             * This is private member request. So the target doesn't matter.
+             * The real target is the prototype object with our TYPEID on it.
+             */
+            let typeId = validateAccess(stack, offset);
+            let pprop = prop.substr(1);
+            let proto = getIdObject(typeId, Object.getPrototypeOf(receiver));
+            let mapKey = (base || {}).prototype;
+
+            if (!proto) {
+                if (typeof(receiver) === "function") {
+                    proto = receiver;
+                    mapKey = receiver;
+                }
+                else {
+                    throw new TypeError("Receiver does not contain the requested property.")
+                }
+            }
+
+            let ptarget = pvt.get(proto);
+            let nameMap = (protMap.get(mapKey) || {}).f;
+
+            //Remapping to prevent cousin class leakage.
+            if (nameMap && (pprop in nameMap)) {
+                pprop = nameMap[pprop];
+            }
+
+            return { ptarget, pprop };
+
+        },
+        get(target, prop, receiver, offset) {
             let retval;
+            offset = offset || 0;
+
             if (prop === TARGET) {
                 retval = target;
             }
             else if ((typeof(prop) == "string") && (prop[0] === TRIGGER)) {
-                /**
-                 * This is private member request. So the target doesn't matter.
-                 * The real target is the prototype object with our TYPEID on it.
-                 */
-                let typeId = validateAccess(stack, this.offset);
-                let pprop = prop.substr(1);
-                let proto = getIdObject(typeId, Object.getPrototypeOf(receiver));
-                let nameMap = protNameMap.get(base);
-
-                //Remapping to prevent cousin class leakage.
-                if (nameMap && (pprop in nameMap)) {
-                    pprop = nameMap[pprop];
-                }
-
-                if (!proto) {
-                    if (typeof(receiver) === "function") {
-                        proto = receiver;
-                    }
-                    else {
-                        throw new TypeError("Receiver does not contain the requested property.")
-                    }
-                }
-
-                let ptarget = pvt.get(proto);
+                let { ptarget, pprop } = this.privateAccess(prop, receiver, (offset || 0) + 1);
                 retval = ptarget[pprop];
             }
             else {
@@ -530,22 +563,13 @@ function Classic(base, data) {
             }
             return retval;
         },
-        set(target, prop, value, receiver) {
+        set(target, prop, value, receiver, offset) {
             let retval = false;
+            offset = offset || 0;
+
             if ((typeof(prop) == "string") && (prop[0] === TRIGGER)) {
-                /**
-                 * This is private member request. So the target doesn't matter.
-                 * The real target is the prototype object with our TYPEID on it.
-                 */
-                let typeId = validateAccess(stack, this.offset);
-                let pprop = prop.substr(1);
-                let proto = getIdObject(typeId, Object.getPrototypeOf(receiver));
+                let { ptarget, pprop } = this.privateAccess(prop, receiver, (offset || 0) + 1);
 
-                if (!proto) {
-                    throw new TypeError("Receiver does not contain the requested property.");
-                }
-
-                let ptarget = pvt.get(proto);
                 if (pprop in ptarget) {
                     ptarget[pprop] = value;
                     retval = true;
@@ -571,7 +595,7 @@ function Classic(base, data) {
                 if (prop === SUPER_CALLED) {
                     this.needSuper = false;
                 }
-                if (this.needSuper && (prop !== "super") &&
+                if (this.needSuper && ![NEW_TARGET, "super"].includes(prop) &&
                     !((typeof(target) === "function") && types.has(target))) {
                     throw new SyntaxError('Must call "this.super()" before using `this`');
                 }
@@ -584,13 +608,17 @@ function Classic(base, data) {
                         prop = UNUSED;
                     }
                     
-                    try {
-                        handler.offset = 1;
-                        retval = handler.get(target, prop, receiver);
-                    }
-                    finally {
-                        handler.offset = 0;
-                    }
+                    retval = handler.get(target, prop, receiver, 1);
+                }
+
+                if (![NEW_TARGET, "__proto__"].includes(prop) && 
+                    (typeof(retval) === "function") && 
+                    !/_\$\d{4,}\$_/.test(retval.name) &&
+                    ("_super" !== retval.name) &&
+                    (Function.prototype[retval.name] !== retval) &&
+                    (Object.prototype[retval.name] !== retval)) {
+                    console.log(`Bound function '${retval.name}'`)
+                    retval = retval.bind(target[FlexibleProxy.TARGET] || target);
                 }
 
                 return retval;
@@ -605,13 +633,7 @@ function Classic(base, data) {
                     this.top_proto = value;
                 }
                 else {
-                    try {
-                        handler.offset = 1;
-                        retval = handler.set(target, prop, value, receiver);
-                    }
-                    finally {
-                        handler.offset = 0;
-                    }
+                    retval = handler.set(target, prop, value, receiver, 1);
                 }
 
                 return retval;
@@ -670,10 +692,10 @@ function Classic(base, data) {
     let className = data[Classic.CLASSNAME];
     let inheritMode = data[Classic.INHERITMODE];
     let shadow;
-    data = convertPrivates(data, stack, TYPEID);
+    data = convertPrivates(data, TYPEID);
     eval(`
     shadow = function ${className}(...args) {
-        let proto = new.target ? new.target.prototype : Object.getPrototypeOf(this);
+        let proto = /*new.target ? new.target.prototype : */Object.getPrototypeOf(this);
 
         if ((inheritMode === Classic.ABSTRACT) && (proto === shadow.prototype)) {
             throw new TypeError("Cannot instantiate an abstract class.");
@@ -686,44 +708,40 @@ function Classic(base, data) {
         let retval, 
             baseTypeId = types.get(base).id,
             ancestor = hasCtor ? shadow.prototype.constructor : base,
-            rawIdProto = Object.setPrototypeOf(Object.defineProperties(toAccessors(data[Classic.PUBLIC], proto), {
+            rawIdProto = Object.create(proto, {
                 [TYPEID]: { value: void 0 },
                 super: {
                     configurable: true,
-                    value: function(...args) {
+                    value: function _super(...args) {
                         this[SUPER_CALLED];
                         return Super(this, base, ...args);
                     }
                 }
-            }), proto),
+            }),
             idProto = new Proxy(rawIdProto, handler);
 
-        let pvtData = Object.create(data[Classic.PRIVATE]);
+        let pvtData = Object.assign({}, data[Classic.PRIVATE]);
         pvt.set(idProto, pvtData);
+
+        runInitializers(idProto, shadow.prototype);
+        runInitializers(pvtData, data[Classic.PRIVATE]);
         
-        if (new.target) { //Didn't provide a public constructor function
+        let newTarget = new.target || this[NEW_TARGET];
+        if (newTarget) {
+            //Didn't provide a public constructor function
             if (isNative(ancestor) || (ancestor === base)) {
                 Object.setPrototypeOf(idProto, proto);
-                new.target[PROTOTYPE] = idProto;
-                retval = Reflect.construct(ancestor, args, new.target);
-                new.target[PROTOTYPE] = null;
+                newTarget[PROTOTYPE] = idProto;
+                retval = Reflect.construct(ancestor, args, newTarget);
+                newTarget[PROTOTYPE] = null;
                 if (!hasCtor) {
                     Object.defineProperty(retval, baseTypeId, { value: void 0 });
                 }
-                runInitializers(idProto, shadow.prototype);
-                runInitializers(pvtData, data[Classic.PRIVATE]);
             } 
             else { //Provided a public constructor
                 let needSuper = (base !== Object) && (ancestor !== base);
-                let newInst = Object.create(idProto, {
-                    [NEW_TARGET]: {
-                        configurable: true,
-                        value: new.target
-                    }
-                });
-
-                let instance = new FlexibleProxy(newInst, needSuper, SUPER_CALLED);
-                retval = ancestor.apply(new Proxy(instance, getInstanceHandler(needSuper)), args);
+                let instance = new FlexibleProxy(Object.create(idProto, {fake: {value: true}}), newTarget, needSuper);
+                retval = ancestor.apply(new Proxy(instance, getInstanceHandler()), args);
                 if (retval === void 0) {
                     retval = instance[FlexibleProxy.TARGET];
                 }
@@ -732,6 +750,14 @@ function Classic(base, data) {
         else {
             retval = ancestor.apply(this, args) || this;
         }
+
+        //Get the inheritance for instances.
+        let inheritance = getInheritance(Object.getPrototypeOf(retval), base.prototype);
+        if (inheritance) {
+            Object.setPrototypeOf(pvtData, inheritance.links);
+        }
+
+        Object.setPrototypeOf(idProto, Object.getPrototypeOf(retval));
         Object.setPrototypeOf(retval, idProto);
         delete rawIdProto.super;
         
@@ -746,7 +772,7 @@ function Classic(base, data) {
         types.set(base, {id: Symbol(base.name)});
     }
 
-    types.set(shadow, {id: TYPEID, mode: data.inheritMode});
+    types.set(shadow, {id: TYPEID, mode: inheritMode});
     Object.defineProperty(shadow, Symbol.hasInstance, {
         enumerable: true,
         value: function(instance) {
@@ -766,20 +792,24 @@ function Classic(base, data) {
     Object.defineProperties(shadow, Object.getOwnPropertyDescriptors(data[Classic.STATIC][Classic.PUBLIC]));
     Object.defineProperty(shadow, TYPEID, { value: void 0 });
     shadow = new Proxy(shadow, getInstanceHandler());
-    pvt.set(shadow, Object.create(data[Classic.STATIC][Classic.PRIVATE]));
-    protMap.set(shadow, data[Classic.STATIC][Classic.PROTECTED]);
+
+    let spvtData = Object.assign({}, data[Classic.STATIC][Classic.PRIVATE]);
+    let protNameMap = data[Classic.STATIC][Classic.PROTECTED];
+    pvt.set(shadow, spvtData);
+    protMap.set(shadow, protNameMap);
     
-    let inheritance = getInheritance(base.prototype, TYPEID);
+    //Get the inheritance for the static object.
+    inheritance = getInheritance(base, base);
     if (inheritance) {
-        Object.setPrototypeOf(data[Classic.PROTECTED], inheritance.data);
-        Object.setPrototypeOf(data[Classic.PRIVATE], inheritance.data);
-        protNameMap.set(base.prototype, inheritance.map);
+        Object.setPrototypeOf(spvtData, inheritance.links);
+        Object.setPrototypeOf(protNameMap.f, inheritance.map.f);
+        Object.setPrototypeOf(protNameMap.r, inheritance.map.r);
     }
-    inheritance = getInheritance(base, TYPEID);
-    if (inheritance) {
-        Object.setPrototypeOf(data[Classic.STATIC][Classic.PROTECTED], inheritance.data);
-        Object.setPrototypeOf(data[Classic.STATIC][Classic.PRIVATE], inheritance.data);
-        protNameMap.set(base, inheritance.map);
+
+    let bprotNameMap = protMap.get(base.prototype);
+    if (bprotNameMap) {
+        Object.setPrototypeOf(data[Classic.PROTECTED].f, bprotNameMap.f);
+        Object.setPrototypeOf(data[Classic.PROTECTED].r, bprotNameMap.r);
     }
 
     Object.seal(data[Classic.PRIVATE]);
@@ -858,11 +888,11 @@ Object.defineProperties(Classic, {
     },
     ABSTRACT: {
         enumerable: true,
-        value: Symbol(`Abstract Class`)
+        get() { return useStrings ? "abstract" : ClassConfigKeys.ABSTRACT; }
     },
     FINAL: {
         enumerable: true,
-        value: Symbol(`Final`)
+        get() { return useStrings ? "final" : ClassConfigKeys.FINAL; }
     },
     init: {
         enumerable: true,
