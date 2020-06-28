@@ -30,9 +30,10 @@ class FlexibleProxy {
                         retval = this.current;
                         break;
                     case SUPER_CALLED:
-                        needSuper = false;
+                        retval = !needSuper;
+                        break;
                     default:
-                        if ((prop === "super") || !needSuper) {
+                        if (["super", TARGET].includes(prop) || !needSuper) {
                             retval = Reflect.get(this.current, prop, receiver);
                         }
                         else {
@@ -48,14 +49,17 @@ class FlexibleProxy {
                     case FlexibleProxy.TARGET:
                         this.current = value;
                         break;
+                    case SUPER_CALLED:
+                        if (needSuper)
+                            needSuper = !value;
+                        break;
                     default:
-                        if ((prop === "super") || !needSuper) {
+                        if (prop === TARGET) {
                             retval = Reflect.set(this.current, prop, value, receiver);
                         }
                         else {
-                            throw new SyntaxError("Cannot use 'this' before calling super.")
+                            throw new SyntaxError("Cannot use 'this' before calling super.");
                         }
-                        break;
                 }
                 return retval;
             }
@@ -78,6 +82,7 @@ const types = new WeakMap;      //Map of constructors and their TYPEIDs
 const initFns = new WeakMap;    //Map of initialization functions
 const proxyMap = new WeakMap;   //Map of instances to privileged instances
 const stack = new Stack;        //Function registration used to validate access
+
 const TARGET = Symbol("Proxy Target");          //Used to retrieve the target from the proxy
 const UNUSED = Symbol("UNUSED");                //Used to ensure that a property isn't found.
 const SUPER_CALLED = Symbol("SUPER_CALLED");    //Used to enable normal use of `this`.
@@ -103,7 +108,7 @@ function makeFnName() {
  * @param {Object} protData - Template of the protected data object. Will be
  * replaced by an array of names of the protected members.
  */
-function mapProtected(pvtData, protData) {
+function mapProtected(pvtData, protData, name) {
     let retval = {f: {}, r: {}}; //forward & reverse mappings
     let keys = Object.getOwnPropertyNames(protData).concat(Object.getOwnPropertySymbols(protData));
     
@@ -111,7 +116,7 @@ function mapProtected(pvtData, protData) {
 
     //Generate a 2-way mapping for the protected keys.
     for (let key of keys) {
-        retval.f[key] = Symbol(key);
+        retval.f[key] = Symbol(`${name}::${key}`);
         retval.r[retval.f[key]] = key;
     }
     return retval;
@@ -168,9 +173,10 @@ function getIdObject(TYPEID, target) {
  * member functions can be identified.
  * @param {function} fn - Target function to wrap
  * @param {Symbol} TYPEID - Unique ID of the class owning fn
+ * @param {Function|Object} owner - Constructor or prototype of the owning class.
  * @returns {function} - uniquely named wrapper function
  */
-function makePvtName(fn, TYPEID) {
+function makePvtName(fn, TYPEID, owner) {
     let name = makeFnName();
     let retval = eval(`
         (function ${name}(...args) {
@@ -183,6 +189,20 @@ function makePvtName(fn, TYPEID) {
     `);
 
     Object.defineProperties(retval, {
+        displayName: {
+            value: `${fn.name} wrapper (as ${name})`
+        },
+        owner: {
+            value: owner
+        },
+        bind: {
+            configurable: true,
+            writable: true,
+            value: function bind(that, ...args) {
+                that = that[FlexibleProxy.TARGET] || that;
+                return Function.prototype.bind.call(this, that, ...args);
+            }
+        },
         toString: {
             configurable: true, 
             writable: true,
@@ -205,9 +225,10 @@ function makePvtName(fn, TYPEID) {
  * @param {DataSpec} data - The object containing the public data and non-public
  * members of the target class.
  * @param {Symbol} TYPEID - ID of the targeted class
+ * @param {Function} ctor - Constructor of the class whose data is being converted.
  * @returns {Object} - Returns a processed version of the prototype object.
  */
-function convertPrivates(data, TYPEID) {
+function convertPrivates(data, TYPEID, ctor) {
     let pvt = {},
         staticPvt = {},
         prot = {},
@@ -215,7 +236,7 @@ function convertPrivates(data, TYPEID) {
         pub = {},
         staticPub = {};
 
-    function convert(dest, src) {
+    function convert(dest, src, owner) {
         let keys = Object.getOwnPropertyNames(src).concat(
             Object.getOwnPropertySymbols(src)
         );
@@ -229,15 +250,15 @@ function convertPrivates(data, TYPEID) {
 
             if ("value" in desc) {
                 if (typeof(desc.value) === "function") {
-                    desc.value = makePvtName(desc.value, TYPEID);
+                    desc.value = makePvtName(desc.value, TYPEID, owner);
                 }
             }
             else {
                 if (("get" in desc) && desc.get) {
-                    desc.get = makePvtName(desc.get, TYPEID);
+                    desc.get = makePvtName(desc.get, TYPEID, owner);
                 }
                 if (("set" in desc) && desc.set) {
-                    desc.set = makePvtName(desc.set, TYPEID);
+                    desc.set = makePvtName(desc.set, TYPEID, owner);
                 }
             }
             Object.defineProperty(dest, key, desc);
@@ -263,13 +284,13 @@ function convertPrivates(data, TYPEID) {
     findOrphans(data);
     findOrphans(data[Classic.STATIC], true);
 
-    prot = mapProtected(data[Classic.PRIVATE], data[Classic.PROTECTED]);
-    staticProt = mapProtected(data[Classic.STATIC][Classic.PRIVATE], data[Classic.STATIC][Classic.PROTECTED]);
+    prot = mapProtected(data[Classic.PRIVATE], data[Classic.PROTECTED], data.className);
+    staticProt = mapProtected(data[Classic.STATIC][Classic.PRIVATE], data[Classic.STATIC][Classic.PROTECTED], data.className);
     
-    convert(pvt, data[Classic.PRIVATE]);
-    convert(pub, data[Classic.PUBLIC]);
-    convert(staticPvt, data[Classic.STATIC][Classic.PRIVATE]);
-    convert(staticPub, data[Classic.STATIC][Classic.PUBLIC]);
+    convert(pvt, data[Classic.PRIVATE], ctor.prototype);
+    convert(pub, data[Classic.PUBLIC], ctor.prototype);
+    convert(staticPvt, data[Classic.STATIC][Classic.PRIVATE], ctor);
+    convert(staticPub, data[Classic.STATIC][Classic.PUBLIC], ctor);
 
     return {
         //If it's not public, it's private...
@@ -366,15 +387,31 @@ function Super(inst, base, ...args) {
         newTarget = inst[NEW_TARGET];
     
     let newInst = Reflect.construct(base, args, newTarget);
+    let typeId = types.get(base).id;
+    let bProto = Object.getPrototypeOf(newInst);
+
     inst[FlexibleProxy.TARGET] = newInst;
-    if (Object.isExtensible(newInst) && types.has(base)) {
-        let typeId = types.get(base).id;
-        if (!newInst.hasOwnProperty(typeId)) {
-            Object.defineProperty(newInst, typeId, { value: void 0 });
-            if (!pvt.has(newInst))
-                pvt.set(newInst, Object.seal({}));
-        }
+    
+    if (Object.isExtensible(newInst) && types.has(base) && !(typeId in newInst)) {
+        //Create and place an empty private container & idProto for the native instance.
+        let bidProto = { __proto__: bProto };
+        let data = Object.seal({});
+        Object.defineProperty(bidProto, typeId, { value: void 0 });
+        pvt.set(Object.seal(bidProto), data);
+        Object.setPrototypeOf(idProto, bidProto);
+        bProto = bidProto;
     }
+
+    Object.setPrototypeOf(idProto, bProto);
+    Object.setPrototypeOf(newInst, idProto);
+    
+    //Don't forget to link in inherited protected properties.
+    let baseIdProto = getIdObject(typeId, newInst);
+    let inheritance = getInheritance(baseIdProto, base.prototype);
+    if (inheritance) {
+        Object.setPrototypeOf(pvtData, inheritance.links);
+    }
+
     runInitializers(idProto, proto);
     runInitializers(pvtData, Object.getPrototypeOf(pvtData));
     return inst;
@@ -446,6 +483,26 @@ function runInitializers(inst, mProto) {
     }
 }
 
+function getInheritedPropertyDescriptor(obj, prop) {
+    let retval;
+    obj = obj[FlexibleProxy.TARGET] || obj[TARGET] || obj;
+
+    while (obj && (typeof(obj) === "object")) {
+        if (obj.hasOwnProperty(prop)) {
+            retval = Object.getOwnPropertyDescriptor(obj, prop);
+            break;
+        }
+        else {
+            obj = Object.getPrototypeOf(obj);
+            if (obj) {
+                obj = obj[FlexibleProxy.TARGET] || obj[TARGET] || obj;
+            }
+        }
+    }
+
+    return retval;
+}
+
 /**
  * Produces an extendable function to be used as the base class for another
  * class. This allows a new class to contain prototype-based data while also
@@ -477,6 +534,7 @@ function runInitializers(inst, mProto) {
  * @property {Symbol|string} PUBLIC - Used to specify properties that will be
  * openly accessible.
  */
+let instID = 0;
 function Classic(base, data) {
     const PROTOTYPE = Symbol("PROTOTYPE");
     switch (arguments.length) {
@@ -487,7 +545,7 @@ function Classic(base, data) {
         case 1: 
             switch (typeof(base)) {
                 case "function":
-                    base = {};
+                    data = {};
                     break;
                 case "object":
                     data = base || {};
@@ -514,8 +572,37 @@ function Classic(base, data) {
         throw new TypeError("Cannot extend a final class.");
     }
 
-    const TYPEID = Symbol(`${data[Classic.CLASSNAME] || `<anonymous> extends ${base.name}`}`);
+    const TYPEID = Symbol(`${data[Classic.CLASSNAME] || `<anonymous> extends ${base.name}`} ${++instID}H`);
     const handler = {
+        createSuper(receiver, offset) {
+            let { ptarget } = this.privateAccess("", receiver, offset);
+            let retval = function _super_(className) {
+                let retval = base.prototype;
+                if (className) {
+                    let target = base;
+
+                    while (target && (target.name !== className)) {
+                        target = Object.getPrototypeOf(target);
+                    }
+
+                    if (target) {
+                        retval = target.prototype;
+                    }
+                }
+                retval = new FlexibleProxy(retval, getInstanceHandler(false));
+                retval[TARGET] = receiver;
+                return retval;
+            };
+            let newProto = (typeof(receiver) === "function") 
+                ? base || null 
+                : (base) 
+                    ? base.prototype
+                    : null;
+            Object.setPrototypeOf(retval, newProto);
+            retval = new Proxy(retval, getInstanceHandler(false));
+
+            return retval;
+        },
         privateAccess(prop, receiver, offset) {
             /**
              * This is private member request. So the target doesn't matter.
@@ -523,8 +610,13 @@ function Classic(base, data) {
              */
             let typeId = validateAccess(stack, offset);
             let pprop = prop.substr(1);
-            let proto = getIdObject(typeId, Object.getPrototypeOf(receiver));
-            let mapKey = (base || {}).prototype;
+            // let rproto = (typeof(receiver) === "function")
+            //     ? Object.getPrototypeOf(receiver)
+            //     : receiver;
+            let proto = getIdObject(typeId, receiver);
+            let mapKey = (typeof receiver === "function")
+                ? receiver
+                : Object.getPrototypeOf(receiver);
 
             if (!proto) {
                 if (typeof(receiver) === "function") {
@@ -540,7 +632,7 @@ function Classic(base, data) {
             let nameMap = (protMap.get(mapKey) || {}).f;
 
             //Remapping to prevent cousin class leakage.
-            if (nameMap && (pprop in nameMap)) {
+            if (ptarget && !ptarget.hasOwnProperty(pprop) && nameMap && (pprop in nameMap)) {
                 pprop = nameMap[pprop];
             }
 
@@ -554,12 +646,33 @@ function Classic(base, data) {
             if (prop === TARGET) {
                 retval = target;
             }
+            else if ((prop === "super") && (target[SUPER_CALLED] !== false)) {
+                if (target.hasOwnProperty(prop)) {
+                    retval = Reflect.get(target, prop, receiver);
+                }
+                else {
+                    retval = this.createSuper(target, offset + 2);
+                }
+            }
             else if ((typeof(prop) == "string") && (prop[0] === TRIGGER)) {
-                let { ptarget, pprop } = this.privateAccess(prop, receiver, (offset || 0) + 1);
-                retval = ptarget[pprop];
+                let { ptarget, pprop } = this.privateAccess(prop, target, offset + 1);
+
+                if (pprop === "class$") {
+                    retval = shadow;
+                }
+                else {
+                    retval = ptarget[pprop];
+                }
             }
             else {
-                retval = Reflect.get(target, prop, receiver);
+                let desc = getInheritedPropertyDescriptor(target, prop);
+                if (desc && desc.get && !/_\$\d{4,}\$_/.test(desc.get.name)) {
+                    let context = receiver[FlexibleProxy.TARGET] || receiver[TARGET] || target;
+                    retval = desc.get.call(context);
+                }
+                else {
+                    retval = Reflect.get(target, prop, receiver);
+                }
             }
             return retval;
         },
@@ -568,7 +681,7 @@ function Classic(base, data) {
             offset = offset || 0;
 
             if ((typeof(prop) == "string") && (prop[0] === TRIGGER)) {
-                let { ptarget, pprop } = this.privateAccess(prop, receiver, (offset || 0) + 1);
+                let { ptarget, pprop } = this.privateAccess(prop, receiver, offset + 1);
 
                 if (pprop in ptarget) {
                     ptarget[pprop] = value;
@@ -579,7 +692,15 @@ function Classic(base, data) {
                 }
             }
             else {
-                retval = Reflect.set(target, prop, value, receiver);
+                let desc = getInheritedPropertyDescriptor(target, prop);
+                if (desc && desc.set && !/_\$\d{4,}\$_/.test(desc.set.name)) {
+                    let context = receiver[FlexibleProxy.TARGET] || receiver[TARGET] || target;
+                    desc.set.call(context, value);
+                    retval = true;
+                }
+                else {
+                    retval = Reflect.set(target, prop, value, receiver);
+                }
             }
             return retval;
         }
@@ -590,8 +711,10 @@ function Classic(base, data) {
             target: void 0,
             needSuper: !!needSuper,
             top_proto: null,
+            originalProto: null,
             get(target, prop, receiver) {
                 let retval;
+                let fpTarget = target[FlexibleProxy.TARGET];
                 if (prop === SUPER_CALLED) {
                     this.needSuper = false;
                 }
@@ -617,8 +740,7 @@ function Classic(base, data) {
                     ("_super" !== retval.name) &&
                     (Function.prototype[retval.name] !== retval) &&
                     (Object.prototype[retval.name] !== retval)) {
-                    console.log(`Bound function '${retval.name}'`)
-                    retval = retval.bind(target[FlexibleProxy.TARGET] || target);
+                    retval = Function.prototype.bind.call(retval, fpTarget || target);
                 }
 
                 return retval;
@@ -631,6 +753,7 @@ function Classic(base, data) {
 
                 if (prop === PROTOTYPE) {
                     this.top_proto = value;
+                    retval = true;
                 }
                 else {
                     retval = handler.set(target, prop, value, receiver, 1);
@@ -692,7 +815,6 @@ function Classic(base, data) {
     let className = data[Classic.CLASSNAME];
     let inheritMode = data[Classic.INHERITMODE];
     let shadow;
-    data = convertPrivates(data, TYPEID);
     eval(`
     shadow = function ${className}(...args) {
         let proto = /*new.target ? new.target.prototype : */Object.getPrototypeOf(this);
@@ -713,7 +835,7 @@ function Classic(base, data) {
                 super: {
                     configurable: true,
                     value: function _super(...args) {
-                        this[SUPER_CALLED];
+                        this[SUPER_CALLED] = true;
                         return Super(this, base, ...args);
                     }
                 }
@@ -722,6 +844,7 @@ function Classic(base, data) {
 
         let pvtData = Object.assign({}, data[Classic.PRIVATE]);
         pvt.set(idProto, pvtData);
+        pvt.set(rawIdProto, pvtData);
 
         runInitializers(idProto, shadow.prototype);
         runInitializers(pvtData, data[Classic.PRIVATE]);
@@ -751,28 +874,35 @@ function Classic(base, data) {
             retval = ancestor.apply(this, args) || this;
         }
 
-        //Get the inheritance for instances.
+        delete rawIdProto.super;
+        
         let inheritance = getInheritance(Object.getPrototypeOf(retval), base.prototype);
         if (inheritance) {
             Object.setPrototypeOf(pvtData, inheritance.links);
-        }
-
-        Object.setPrototypeOf(idProto, Object.getPrototypeOf(retval));
-        Object.setPrototypeOf(retval, idProto);
-        delete rawIdProto.super;
+        }        
+        
         
         //Save a proxy to use internally. Yup, it's an inverse membrane!
         proxyMap.set(retval, new Proxy(retval, getInstanceHandler()));
+
         //Return the unproxied version.
         return retval;
     }
-   `);
+    `);
+    
+    let pShadow = new Proxy(shadow, getInstanceHandler());
+    data = convertPrivates(data, TYPEID, pShadow);
 
-    if (!types.has(base)) {
-        types.set(base, {id: Symbol(base.name)});
-    }
+    let spvtData = Object.assign({}, data[Classic.STATIC][Classic.PRIVATE]);
+    let protNameMap = data[Classic.STATIC][Classic.PROTECTED];
 
     types.set(shadow, {id: TYPEID, mode: inheritMode});
+    types.set(pShadow, {id: TYPEID, mode: inheritMode});
+
+    if (!types.has(base)) {
+        types.set(base, {id: Symbol(`${base.name} ${++instID}L`)});
+    }
+
     Object.defineProperty(shadow, Symbol.hasInstance, {
         enumerable: true,
         value: function(instance) {
@@ -791,12 +921,11 @@ function Classic(base, data) {
 
     Object.defineProperties(shadow, Object.getOwnPropertyDescriptors(data[Classic.STATIC][Classic.PUBLIC]));
     Object.defineProperty(shadow, TYPEID, { value: void 0 });
-    shadow = new Proxy(shadow, getInstanceHandler());
-
-    let spvtData = Object.assign({}, data[Classic.STATIC][Classic.PRIVATE]);
-    let protNameMap = data[Classic.STATIC][Classic.PROTECTED];
+    
     pvt.set(shadow, spvtData);
+    pvt.set(pShadow, spvtData);
     protMap.set(shadow, protNameMap);
+    protMap.set(pShadow, protNameMap);
     
     //Get the inheritance for the static object.
     inheritance = getInheritance(base, base);
@@ -818,10 +947,10 @@ function Classic(base, data) {
     Object.seal(data[Classic.STATIC][Classic.PROTECTED]);
 
     if (data[Classic.STATIC][Classic.PUBLIC].hasOwnProperty("constructor")) {
-        data[Classic.STATIC][Classic.PUBLIC].constructor.call(shadow);
+        data[Classic.STATIC][Classic.PUBLIC].constructor.call(pShadow);
     }
 
-    return shadow;
+    return pShadow;
 }
 
 const AccessLevels = {
@@ -914,4 +1043,3 @@ Object.defineProperties(Classic, {
 }); 
 
 module.exports = Classic;
-console.log("Loaded Classic.js");
