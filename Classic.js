@@ -633,11 +633,16 @@ function Classic(base, data) {
     const handler = {
         createSuper(receiver) {
             let retval = function _super(className) {
+                if (!["function", "string", "undefined"].includes(typeof(className))) {
+                    throw new TypeError(`If supplied a parameter, super() must be given a string or function.`)
+                }
                 let retval = base.prototype;
                 if (className) {
                     let target = base;
 
-                    while (target && (target.name !== className)) {
+                    while (target && (typeof(className) === "string")
+                        ? (target.name !== className)
+                        : (target != className)) {
                         target = Object.getPrototypeOf(target);
                     }
 
