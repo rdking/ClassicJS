@@ -1,6 +1,6 @@
 {
   "name": "classicjs",
-  "version": "0.9.1",
+  "version": "0.9.5",
   "description": "Class with support for private, protected, and public, even while proxy-wrapped. Also provides support for instance initialization in the declaration.",
   "main": "Classic.js",
   "directories": {
