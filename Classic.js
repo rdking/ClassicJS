@@ -524,10 +524,12 @@ function fixupData(data) {
  */
 function runInitializers(inst, mProto) {
     let keys = getAllOwnPropertyKeys(mProto);
+    let iProto = Object.getPrototypeOf(inst);
     let isID = pvt.has(inst);
+    let src = (mProto instanceof iProto) ? iProto : mProto;
 
     for (let key of keys) {
-        let def = Object.getOwnPropertyDescriptor(mProto, key);
+        let def = Object.getOwnPropertyDescriptor(src, key);
         
         if ("value" in def) {
             let val = (def) ? def.value : undefined;

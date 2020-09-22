@@ -22,7 +22,7 @@ import Classic from "classicjs";
 // const Classic = require("classic.js");
 const { STATIC, PRIVATE, PROTECTED, PUBLIC, CLASSNAME } = Classic;
 
-class Ex extends Classic({
+const Ex = Classic({
     [CLASSNAME]: "Ex",
     [PRIVATE]: {
         foo: "foo"
@@ -62,7 +62,7 @@ import Classic from "classicjs";
 // const Classic = require("classic.js");
 Classic.UseStrings = true;      //Turn on support for string section names
 
-class Ex extends Classic({
+const Ex = Classic({
     className: "Ex",
     private: {
         foo: "foo"
@@ -198,6 +198,7 @@ The `Classic` function has a small API attached to it. This API provides configu
 * **STATIC** - Used to define members that are part of the constructor as opposed to an instance.
 * **PRIVATE** - Used to define members that cannot be accessed outside of the owning object's type.
 * **PROTECTED** - Used to define members that cannot be publicly accessed, but are still accessible by the owning object's type and any descendants of that type.
+* **PUBLIC** - Used to define members of the public prototype.
 * **PLACEHOLDER** - Used to identify prototype elements that are placeholders for initialization functions.
 
 ### Methods
@@ -211,9 +212,10 @@ As mentioned before, there are a few features of ClassicJS that don't exist with
 
 ### Abstract & Final Inheritance Modes
 These are just as you'd expect in any class-based language that supports them.
+
 ```js
 const Ex = Classic({
-    [Classic.INHERITMODE]: Classic.ABSTRACT,
+    [Classic.INHERITMODE]: Classic.ABSTRACT, //Could also be Classic.FINAL
     ...
 })
 
@@ -221,19 +223,103 @@ const Ex = Classic({
 Classic.UseStrings = true
 
 const Ex = Classic({
-    inheritMode: "abstract",
+    inheritMode: "abstract",    //Could also be "final"
     ...
 })
 ```
 
 ### Static Constructor
-Suppose you needed to initalize some private static data in a `class` that depended on other factors. The static constructor is the perfect place to do this
+Suppose you needed to initalize something as soon as this class exists. The static constructor is your first chance to do this. By embedding your initialization logic in the static constructor, you can be absolutely certain that this initialization takes place before any other code has had a chance to manipulate the class. Inside the constructor function, `this` is the class constructor. The static constructor cannot take arguments.
+
+```js
+const Ex = Classic({
+    ...
+    [Classic.STATIC]: {
+        constructor() {
+            //Do something interesting!
+        }
+    }
+    ...
+})
+
+```
 
 ### Targetable `super()`
+In ES6, `class` constructor functions use `super` to access the base class's methods. However, that's fairly limited. There's no convenience tool for accessing any ancestors beyond the immediate parent `class`. A ClassicJS class, can also make use of the built-in `super` accessor. However, it has the exact same limitations. To alleviate this, Classic includes `this.super()` to serve the same purpose. The difference is that `this.super()` takes 1 optional argument: an ancestor class or it's name. This means, even if you only know the name of the ancestor class (assuming all the ancestor class names are unique), you can even call a function from an ancestor that was overridden by a later ancestor without resorting to manually digging through the prototype chain to find it.
+
+```js
+Classic.UseStrings = true;
+const Ex1 = Classic({
+    className: "Ex1",
+    public: {
+        someFunc() { console.log("Ex1::someFunc"); }
+    }
+})
+
+const Ex2 = Classic({
+    className: "Ex2",
+    public: {
+        someFunc() { console.log(`Ex2::someFunc overrides ${super.someFunc()}`); }
+    }
+})
+
+const Ex3 = Classic({
+    className: "Ex3",
+    public: {
+        someFunc() { console.log(`Ex3::someFunc overrides Ex2::someFunc and retrieves ${this.super("Ex1").someFunc()}`); }
+    }
+})
+```
 
 
 ### Prototype-modifiable Field Initialization
+ClassicJS takes full advantage of the fact that JavaScript is prototype-based. So all public members are prototype members. The only problem with this is the unfortunate footgun that can happen when one initializes a prototype member with an object in the class definition. All instance of the class will share that copy of the object. This has been known to cause fairly costly issues for some developers.
 
+To get around this problem, there is a helper function: `Classic.init()`. This function takes a function as a parameter, and queue's it to be called when a class instance is created. In this way, your prototype-based object property is effectively initialized to the value your function returns.
 
+```js
+const {init} = Classic;
+Classic.UseStrings = true;
+const Ex = Classic({
+    private: {
+        someObj: init(()=>({...}))
+    },
+    public: {
+        someObj2: init(()=>{
+            ...
+            return ...;
+        })
+    }
+})
+```
 
-The object you pass to `Classic` will be used to create a prototype for the new class. So you can think of it effectively as the prototype. However, the actual prototype produced will not be assignment compatible with this object. With the change of a boolean option, the keys used for the prototype object can switch between being a symbol or the more common strings (`PRIVATE === "private"`). All keys are optional, but you can only place properties under these keys. ClassicJS throws an error if it finds an out-of-place entry.
+It must be understood that the private and protected sections of the class definition define a "private prototype" that is used to create the private context of an instance. As such, object properties of the private context must also be initialized using `Classic.init()`.
+
+Since using `Classic.init()` does not call the function parameter until an instance is created, ClassicJS initializes the prototype property with a unique, frozen object with a single property of `undefined` value: `Classic.PLACEHOLDER`. This object is used to identify the property as being in need of initialization. Since the object is both unique and readily identifiable, it's possible to replace the initializer function for any public property.
+
+```js
+const {init} = Classic;
+Classic.UseStrings = true;
+const Ex = Classic({
+    private: {
+        someObj: init(()=>({...}))
+    },
+    public: {
+        someObj2: init(()=>{
+            ...
+            return ...;
+        })
+    }
+})
+
+if (Classic.getInitValue(Ex.prototype.someObj2)) {
+    Ex.prototype.someObj2 = init(someFn);
+}
+```
+It must be noted that it is **not possible** to replace the initializer for private and protected members. Their prototypes are not publicly exposed, so there's simply no way to access them after the class definition has been processed.
+
+`Classic.getInitValue()` is used to check if a property has a placeholder object. If it does, this function returns the function associated with that placeholder object. In this way, it is always possible to replace the initialization functions for members on the prototype. As long as all initialization objects are managed using `Classic.init()` & `Classic.getInitValue()`, there will be no issues with the object-on-the-prototype footgun.
+
+**Note:** Do not use `Classic.init()` on static members. Such initializers will never be run.
+
+**Note:** While the initializer functions do have access to `this`, they do not have access to the private and protected members of the class. This is due to the fact that they are potentially external to the class definition and definitively replaceable. Even if the replaceablility were to be removed, the fact that `Classic` has no way of determining whether or not the initialization function was external or declared inline in the definition means that all such functions must be viewed as external. This is also true for the initializers on private and protected members. Any initialization that requires access to private or protected data should be done in the constructor.
