@@ -125,6 +125,8 @@ const Ex2 = Classic(Ex, {
 
 As you would expect, `private` members are not shared or exposed, and `protected` members are not exposed. In fact, the result of creating a new instance of a ClassicJS class is a seemingly normal object. It is not a Proxy, and that's precisely what allows ClassicJS classes to be used in creating HTML Custom Elements, extending native objects, and even interoperating (somewhat) with objects containing the new private fields. That being said, I would strongly suggest not trying to mix private fields into ClassicJS classes. They just won't work. While `new` returns a seemingly normal object, calling any function on that object turns `this` into a Proxy. ClassicJS class instance objects are essentially inverse membranes. Where a membrane uses a pair of Proxies to share the details of an instance, this inverse membrane exposes an instance to hide the details of a pair of Proxies. Fun right?
 
+Another thing that just won't work is `super()`. Sadly, it's tied to the constructor function of `class`. As a replacement, ClassicJS provides `this.super()`. It has exactly the same functionality as `super`. If you extend a base class without calling this function, you will not be able to use `this` to access anything in the class! Of course, if you don't specify a base class, or don't specify a constructor function, then calling `this.super()` is completely unnecessary and will be handled for you.
+
 ---
 ## The `Classic` Function
 The features of ClassicJS are exposed through the `Classic` function. The primary job of `Classic` is to create new class constructors and prototypes, along with the additional plumbing required to support private and protected members. `Classic` has 2 arguments.
