@@ -703,8 +703,8 @@ function Classic(base, data) {
             else if ((typeof(prop) == "string") && (prop[0] === TRIGGER)) {
                 let { ptarget, pprop } = this.privateAccess(prop, target, offset + 1);
 
-                if (pprop === "class$") {
-                    retval = shadow;
+                if (pprop === Classic.CLASS) {
+                    retval = pShadow;
                 }
                 else {
                     retval = Reflect.get(ptarget, pprop, receiver);
@@ -1034,6 +1034,8 @@ const ClassConfigKeys = {
     InheritMode: Symbol("ClassicJS::INHERITMODE")
 };
 
+const CLASS = Symbol("ClassicJS::CLASS");
+
 Object.defineProperties(Classic, {
     PrivateAccessSpecifier: {
         enumerable: true,
@@ -1083,6 +1085,10 @@ Object.defineProperties(Classic, {
     PLACEHOLDER: {
         enumerable: true,
         value: Symbol(`Initializer PlaceHolder`)
+    },
+    CLASS: {
+        enumerable: true,
+        get() { return useStrings ? "cla$$" : CLASS;}
     },
     ABSTRACT: {
         enumerable: true,

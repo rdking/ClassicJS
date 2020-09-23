@@ -9,6 +9,7 @@ This is a library designed to provide fully privileged member support to ES6 cla
 * Abstract and Final classes.
 * Supports HTML Custom Elements.
 * Targetable `super` accessor.
+* Constructor reference on the instance.
 
 ---
 
@@ -202,6 +203,7 @@ The `Classic` function has a small API attached to it. This API provides configu
 * **PROTECTED** - Used to define members that cannot be publicly accessed, but are still accessible by the owning object's type and any descendants of that type.
 * **PUBLIC** - Used to define members of the public prototype.
 * **PLACEHOLDER** - Used to identify prototype elements that are placeholders for initialization functions.
+* **CLASS** - Used to retrieve the constructor of the current instance.
 
 ### Methods
 * **init** - Used to set an initializer function on the prototype to add an instance-specific value to a property.
@@ -325,3 +327,16 @@ It must be noted that it is **not possible** to replace the initializer for priv
 **Note:** Do not use `Classic.init()` on static members. Such initializers will never be run.
 
 **Note:** While the initializer functions do have access to `this`, they do not have access to the private and protected members of the class. This is due to the fact that they are potentially external to the class definition and definitively replaceable. Even if the replaceablility were to be removed, the fact that `Classic` has no way of determining whether or not the initialization function was external or declared inline in the definition means that all such functions must be viewed as external. This is also true for the initializers on private and protected members. Any initialization that requires access to private or protected data should be done in the constructor.
+
+### Constructor reference on the instance.
+Did you ever wish there was a simple, guaranteed way of referencing the class constructor without relying on the prototype, or requiring the class to have a name? With ClassicJS, it's as simple as:
+
+```js
+//Ex is any one of the examples above
+let a = new Ex();
+let ctor = a[Classic.CLASS];
+//or if Classic.UseStrings == true
+ctor = a.cla$$;
+```
+
+I decided to use those "$" for the same reason as creating the Symbol key names. Plus, it's enough of a visual break to let you know that this is not a normal member of your class. With this, even if someone deletes the constructor from your prototype, and your class is anonymous, as long as you have an instance, you have access to the constructor.
