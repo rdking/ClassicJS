@@ -427,7 +427,7 @@ function validateAccess(offset, receiver) {
     let fn = stack.peek();
 
     //V8 adds an error-type line in the stack trace.
-    if (eStack[0] === "Error")
+    if (eStack[0].substr(0,5) === "Error")
         eStack.shift();
 
     if (!eStack[3 + offset].includes(fn.name))
@@ -526,7 +526,7 @@ function runInitializers(inst, mProto) {
     let keys = getAllOwnPropertyKeys(mProto);
     let iProto = Object.getPrototypeOf(inst);
     let isID = pvt.has(inst);
-    let src = (mProto instanceof iProto) ? iProto : mProto;
+    let src = Object.prototype.isPrototypeOf(mProto, iProto) ? iProto : mProto;
 
     for (let key of keys) {
         let def = Object.getOwnPropertyDescriptor(src, key);
@@ -721,7 +721,7 @@ function Classic(base, data) {
                 }
             }
 
-            if (![TARGET, TARGET, NEW_TARGET, "__proto__"].includes(prop) && 
+            if (![Symbol.hasInstance, TARGET, TARGET, NEW_TARGET, "__proto__"].includes(prop) && 
                 (typeof(retval) === "function") && 
                 !/_\$\d{4,}\$_/.test(retval.name) &&
                 ("_super" !== retval.name) &&
@@ -948,7 +948,12 @@ function Classic(base, data) {
             }
     
             //Run the constructor function.
-            retval = ancestor.apply(instance, args);
+            if (ancestor === Object) {
+                retval = instance[TARGET] || instance;
+            }
+            else {
+                retval = ancestor.apply(instance, args);
+            }
     
             if (retval === void 0) {
                 retval = needSuper
@@ -972,6 +977,7 @@ function Classic(base, data) {
     data = convertData(data, pShadow, base);
 
     //Fixup the class constructor...
+    shadow.prototype = new Proxy(data[Classic.PUBLIC], handler);
     Object.defineProperty(shadow.prototype, "constructor", {
         enumerable: true,
         value: pShadow

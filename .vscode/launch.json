@@ -16,6 +16,9 @@
             "name": "Jest Tests",
             "program": "${workspaceRoot}/node_modules/jest/bin/jest.js",
             "args": [
+                "--verbose",
+                "--no-cache",
+                "--runInBand",
                 "-i"
             ],
             "internalConsoleOptions": "openOnSessionStart"
