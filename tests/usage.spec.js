@@ -1,22 +1,23 @@
 let Classic = require("../Classic");
-const {
-    STATIC, PRIVATE, PROTECTED, PUBLIC, PLACEHOLDER, getInitValue
-} = Classic;
+// const {
+//     STATIC, PRIVATE, PROTECTED, PUBLIC, PLACEHOLDER, getInitValue
+// } = Classic;
 const INIT = Classic.init;
+Classic.UseStrings = true;
 
 let Base, Child, GrandChild;
 
 describe("Testing a class declaration...", () => {
     beforeAll(() => {
         Base = Classic({
-            [STATIC]: {
-                [PRIVATE]: {
+            static: {
+                private: {
                     pvtMember: 21
                 },
-                [PROTECTED]: {
+                protected: {
                     ptdMember: Math.PI * 2
                 },
-                [PUBLIC]: {
+                public: {
                     pubMember: Symbol("static data"),
                     getData() {
                         return {
@@ -27,13 +28,13 @@ describe("Testing a class declaration...", () => {
                     }
                 }
             },
-            [PRIVATE]: {
+            private: {
                 pvtMember: 42
             },
-            [PROTECTED]: {
+            protected: {
                 ptdMember: Math.PI
             },
-            [PUBLIC]: {
+            public: {
                 pubMember: Symbol("instance data"),
                 pubObjMember: INIT(() => ({ random: Math.random() * Number.MAX_SAFE_INTEGER})),
                 getData() {

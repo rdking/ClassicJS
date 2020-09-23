@@ -568,7 +568,7 @@ function getInheritedPropertyDescriptor(obj, prop) {
  * Produces an extendable function to be used as the base class for another
  * class. This allows a new class to contain prototype-based data while also
  * maintaining privilege levels that work properly even inside a Proxy.
- * @param {Function?} base - Base class constructor to used. Defaults to Object.
+ * @param {Function} [base] - Base class constructor to used. Defaults to Object.
  * @param {DataSpec} data - Object describing the data that will exist on the
  * prototype and it's corresponding privileges.
  * @returns {Function} - The constructor for the newly defined class. 
@@ -1034,7 +1034,11 @@ const ClassConfigKeys = {
     InheritMode: Symbol("ClassicJS::INHERITMODE")
 };
 
-const CLASS = Symbol("ClassicJS::CLASS");
+const ClassConstants = {
+    CLASS: Symbol("ClassicJS::CLASS"),
+    ABSTRACT: Symbol("ClassicJS::ABSTRACT"),
+    FINAL: Symbol("ClassicJS::FINAL")
+};
 
 Object.defineProperties(Classic, {
     PrivateAccessSpecifier: {
@@ -1088,15 +1092,15 @@ Object.defineProperties(Classic, {
     },
     CLASS: {
         enumerable: true,
-        get() { return useStrings ? "cla$$" : CLASS;}
+        get() { return useStrings ? "cla$$" : ClassConstants.CLASS;}
     },
     ABSTRACT: {
         enumerable: true,
-        get() { return useStrings ? "abstract" : ClassConfigKeys.ABSTRACT; }
+        get() { return useStrings ? "abstract" : ClassConstants.ABSTRACT; }
     },
     FINAL: {
         enumerable: true,
-        get() { return useStrings ? "final" : ClassConfigKeys.FINAL; }
+        get() { return useStrings ? "final" : ClassConstants.FINAL; }
     },
     init: {
         enumerable: true,
