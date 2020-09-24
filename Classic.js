@@ -398,7 +398,9 @@ function convertData(data, ctor, base) {
 
     let retval = {
         ancestry: [].concat(baseDef.ancestry || []),
-        constructor: pub.constructor,
+        constructor: pub.hasOwnProperty("constructor")
+            ? pub.constructor
+            : void 0,
         [Classic.INHERITMODE]: data[Classic.INHERITMODE],
         [Classic.PRIVATE]: pvt,
         [Classic.PROTECTED]: prot,
@@ -721,7 +723,7 @@ function Classic(base, data) {
                 }
             }
 
-            if (![Symbol.hasInstance, TARGET, TARGET, NEW_TARGET, "__proto__"].includes(prop) && 
+            if (![Symbol.hasInstance, TARGET, TARGET, NEW_TARGET, "constructor", "__proto__"].includes(prop) && 
                 (typeof(retval) === "function") && 
                 !/_\$\d{4,}\$_/.test(retval.name) &&
                 ("_super" !== retval.name) &&
