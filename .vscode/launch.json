@@ -21,7 +21,10 @@
                 "--runInBand",
                 "-i"
             ],
-            "internalConsoleOptions": "openOnSessionStart"
+            "internalConsoleOptions": "openOnSessionStart",
+            "skipFiles": [
+                "node_modules/**/*.js"
+            ]
         }
     ]
 }

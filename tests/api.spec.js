@@ -1,26 +1,159 @@
 let Classic = require("../Classic");
 
-describe("Testing ClassicJS Syntax...", () => {
+describe("Testing ClassicJS Syntax", () => {
     describe("API Presence Checks...", () => {
-        test("API has all prototype section specifiers", () => {
-            expect(Classic).toHaveProperty("STATIC");
-            expect(Classic).toHaveProperty("PRIVATE");
-            expect(Classic).toHaveProperty("PROTECTED");
-            expect(Classic).toHaveProperty("PUBLIC");
+        describe("configuration options", () => {
+            test("exist", () => {
+                expect(Classic).toHaveProperty("PrivateAccessSpecifier");
+                expect(Classic).toHaveProperty("UseStrings");
+            });
         });
-        test("API has all configuration options", () => {
-            expect(Classic).toHaveProperty("PrivateAccessSpecifier");
-            expect(Classic).toHaveProperty("UseStrings");
+        describe("helper functions", () => {
+            test("exists", () => {
+                expect(Classic).toHaveProperty("init");
+                expect(Classic).toHaveProperty("getInitValue");
+            });
+            test("are immutable", () => {
+                let init = Classic.init;
+                let getInitValue = Classic.getInitValue;
+                Classic.init = null;
+                Classic.getInitValue = null;
+                expect(Classic.init).toEqual(init);
+                expect(Classic.getInitValue).toEqual(getInitValue);
+            });
+            test("are functions", () => {
+                expect(typeof(Classic.init)).toBe("function");
+                expect(typeof(Classic.getInitValue)).toBe("function");
+            });
         });
-        test("API has all helper functions", () => {
-            expect(Classic).toHaveProperty("init");
-            expect(typeof(Classic.init)).toBe("function");
-            expect(Classic).toHaveProperty("getInitValue");
-            expect(typeof(Classic.getInitValue)).toBe("function");
+        describe("prototype section specifiers", () => {
+            beforeAll(() => {
+                Classic.UseStrings = false;
+            });
+            describe("as Symbols", () => {
+                test("exist", () => {
+                    expect(Classic).toHaveProperty("STATIC");
+                    expect(Classic).toHaveProperty("PRIVATE");
+                    expect(Classic).toHaveProperty("PROTECTED");
+                    expect(Classic).toHaveProperty("PUBLIC");
+                });
+                test("are immutable", () => {
+                    let cStatic = Classic.STATIC;
+                    let cPrivate = Classic.PRIVATE;
+                    let cProtected = Classic.PROTECTED;
+                    let cPublic = Classic.PUBLIC;
+                    Classic.STATIC = Symbol();
+                    Classic.PRIVATE = Symbol();
+                    Classic.PROTECTED = Symbol();
+                    Classic.PUBLIC = Symbol();
+                    expect(Classic.STATIC).toEqual(cStatic);
+                    expect(Classic.PRIVATE).toEqual(cPrivate);
+                    expect(Classic.PROTECTED).toEqual(cProtected);
+                    expect(Classic.PUBLIC).toEqual(cPublic);
+                });
+                test("are symbols", () => {
+                    expect(typeof(Classic.STATIC)).toBe("symbol");
+                    expect(typeof(Classic.PRIVATE)).toBe("symbol");
+                    expect(typeof(Classic.PROTECTED)).toBe("symbol");
+                    expect(typeof(Classic.PUBLIC)).toBe("symbol");
+                });
+            });
+            describe("as strings", () => {
+                beforeAll(() => {
+                    Classic.UseStrings = true;
+                });
+                test("exist", () => {
+                    expect(Classic).toHaveProperty("STATIC");
+                    expect(Classic).toHaveProperty("PRIVATE");
+                    expect(Classic).toHaveProperty("PROTECTED");
+                    expect(Classic).toHaveProperty("PUBLIC");
+                });
+                test("are immutable", () => {
+                    let cStatic = Classic.STATIC;
+                    let cPrivate = Classic.PRIVATE;
+                    let cProtected = Classic.PROTECTED;
+                    let cPublic = Classic.PUBLIC;
+                    Classic.STATIC = Symbol();
+                    Classic.PRIVATE = Symbol();
+                    Classic.PROTECTED = Symbol();
+                    Classic.PUBLIC = Symbol();
+                    expect(Classic.STATIC).toEqual(cStatic);
+                    expect(Classic.PRIVATE).toEqual(cPrivate);
+                    expect(Classic.PROTECTED).toEqual(cProtected);
+                    expect(Classic.PUBLIC).toEqual(cPublic);
+                });
+                test("are strings", () => {
+                    expect(typeof(Classic.STATIC)).toBe("string");
+                    expect(typeof(Classic.PRIVATE)).toBe("string");
+                    expect(typeof(Classic.PROTECTED)).toBe("string");
+                    expect(typeof(Classic.PUBLIC)).toBe("string");
+                });
+            });
         });
-        test("API has the PLACEHOLDER constant", () => {
-            expect(Classic).toHaveProperty("PLACEHOLDER");
-            expect(typeof(Classic.PLACEHOLDER)).toBe("symbol");
+        describe("useful constants", () => {
+            beforeAll(() => {
+                Classic.UseStrings = false;
+            });
+            describe("as Symbols", () => {
+                test("exist", () => {
+                    expect(Classic).toHaveProperty("PLACEHOLDER");
+                    expect(Classic).toHaveProperty("CLASS");
+                    expect(Classic).toHaveProperty("ABSTRACT");
+                    expect(Classic).toHaveProperty("FINAL");
+                });
+                test("are immutable", () => {
+                    let placeHolder = Classic.PLACEHOLDER;
+                    let cClass = Classic.CLASS;
+                    let abstract = Classic.ABSTRACT;
+                    let final = Classic.FINAL;
+                    Classic.PLACEHOLDER = Symbol();
+                    Classic.CLASS = Symbol();
+                    Classic.ABSTRACT = Symbol();
+                    Classic.FINAL = Symbol();
+                    expect(Classic.PLACEHOLDER).toEqual(placeHolder);
+                    expect(Classic.CLASS).toEqual(cClass);
+                    expect(Classic.ABSTRACT).toEqual(abstract);
+                    expect(Classic.FINAL).toEqual(final);
+                });
+                test("are symbols", () => {
+                    expect(typeof(Classic.PLACEHOLDER)).toBe("symbol");
+                    expect(typeof(Classic.CLASS)).toBe("symbol");
+                    expect(typeof(Classic.ABSTRACT)).toBe("symbol");
+                    expect(typeof(Classic.FINAL)).toBe("symbol");
+                });
+            });
+            describe("as strings", () => {
+                beforeAll(() => {
+                    Classic.UseStrings = true;
+                });
+                test("exist", () => {
+                    expect(Classic).toHaveProperty("PLACEHOLDER");
+                    expect(Classic).toHaveProperty("CLASS");
+                    expect(Classic).toHaveProperty("ABSTRACT");
+                    expect(Classic).toHaveProperty("FINAL");
+                });
+                test("are immutable", () => {
+                    let placeHolder = Classic.PLACEHOLDER;
+                    let cClass = Classic.CLASS;
+                    let abstract = Classic.ABSTRACT;
+                    let final = Classic.FINAL;
+                    Classic.PLACEHOLDER = Symbol();
+                    Classic.CLASS = Symbol();
+                    Classic.ABSTRACT = Symbol();
+                    Classic.FINAL = Symbol();
+                    expect(Classic.PLACEHOLDER).toEqual(placeHolder);
+                    expect(Classic.CLASS).toEqual(cClass);
+                    expect(Classic.ABSTRACT).toEqual(abstract);
+                    expect(Classic.FINAL).toEqual(final);
+                });
+                test("are strings (except PLACEHOLDER)", () => {
+                    //Classic.PLACEHOLDER is always a Symbol!
+                    expect(typeof(Classic.PLACEHOLDER)).toBe("symbol");
+                    expect(typeof(Classic.CLASS)).toBe("string");
+                    expect(typeof(Classic.ABSTRACT)).toBe("string");
+                    expect(typeof(Classic.FINAL)).toBe("string");
+                });
+            });
         });
     });
     describe("Configuration Checks:", () => {
@@ -91,6 +224,7 @@ describe("Testing ClassicJS Syntax...", () => {
             test("returns an object", () => {
                 expect(() => { initted = Classic.init(() => {})}).not.toThrow();
                 expect(initted).not.toBeNull();
+                expect(initted).not.toBeUndefined();
                 expect(typeof(initted)).toBe("object");
             });
             test("returns an immutable value", () => {

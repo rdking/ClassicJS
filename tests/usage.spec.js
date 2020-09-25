@@ -116,38 +116,43 @@ describe("Testing a derived class declaration...", () => {
             className: "Child",
             static: {
                 private: {
-                    pvtMember: 21
+                    pvtMember2: 18
                 },
                 protected: {
-                    ptdMember: Math.PI * 2
+                    ptdMember2: Math.PI * 4
                 },
                 public: {
-                    pubMember: Symbol("static data"),
+                    pubMember2: Symbol("more static data"),
                     getData() {
-                        return {
-                            pvtMember: this.$pvtMember,
-                            ptdMember: this.$ptdMember,
-                            pubMember: this.pubMember
-                        }
+                        return Object.assign(Base.getData(), {
+                            Child: {
+                                pvtMember2: this.$pvtMember2,
+                                ptdMember2: this.$ptdMember2,
+                                pubMember2: this.pubMember2
+                            }
+                        });
+                    },
+                    privateTest() {
+                        expect(this.$pvtMember).toThrow();
+                        expect(this.$pvtMember2).toBe(18);
                     }
                 }
             },
             private: {
-                pvtMember: 42
+                pvtMember: 36
             },
             protected: {
-                ptdMember: Math.PI
+                ptdMember2: Math.E * 2
             },
             public: {
-                pubMember: Symbol("instance data"),
-                pubObjMember: INIT(() => ({ random: Math.random() * Number.MAX_SAFE_INTEGER})),
+                pubMember2: Symbol("more instance data"),
+                pubObjMember2: INIT(() => ({ random: Math.random() * Math.SQRT2})),
                 getData() {
-                    return {
-                        pvtMember: this.$pvtMember,
-                        ptdMember: this.$ptdMember,
-                        pubMember: this.pubMember,
-                        pubObjMember: this.pubObjMember
-                    }
+                    return Object.assign(super.getData(), {
+                        ptdMember2: this.$ptdMember2,
+                        pubMember2: this.pubMember2,
+                        pubObjMember2: this.pubObjMember2
+                    });
                 }
             }
         });

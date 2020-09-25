@@ -531,7 +531,7 @@ function runInitializers(inst, mProto) {
     let src = Object.prototype.isPrototypeOf(mProto, iProto) ? iProto : mProto;
 
     for (let key of keys) {
-        let def = Object.getOwnPropertyDescriptor(src, key);
+        let def = getInheritedPropertyDescriptor(src, key);
         
         if ("value" in def) {
             let val = (def) ? def.value : undefined;
