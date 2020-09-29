@@ -389,15 +389,12 @@ function convertData(data, ctor, base) {
     Object.setPrototypeOf(pvt, iProt);
     Object.setPrototypeOf(staticPvt, iStaticProt);
 
-    //Link the inherited prototype with the current one.
-    Object.setPrototypeOf(pub, baseDef[Classic.PUBLIC]);
-
     //Wrap all the functions. No need to wrap the protected blocks.
     convert(pvt, pvt, ctor.prototype);
     convert(staticPvt, staticPvt, ctor);
 
     let retval = {
-        ancestry: [].concat(baseDef.ancestry || []),
+        ancestry: [ctor].concat(baseDef.ancestry || []),
         constructor: pub.hasOwnProperty("constructor")
             ? pub.constructor
             : void 0,
@@ -411,7 +408,9 @@ function convertData(data, ctor, base) {
             [Classic.PUBLIC]: staticPub,
         }
     };
-    retval.ancestry.push(base);
+
+    //Link the inherited prototype with the current one.
+    Object.setPrototypeOf(pub, base.prototype || null);
 
     return retval;
 }
@@ -674,7 +673,7 @@ function Classic(base, data) {
             let pprop = prop.substr(1);
             let pKey = (typeof(receiver) === "function")
                 ? targetClass
-                : targetClass.prototype;
+                : targetClass.prototype[TARGET];
             let tKey = receiver[TARGET] || receiver;
             let nameMap = (protMap.get(pKey) || {}).f;
             let ptarget = doubleMapGet(pvt, targetClass, tKey);
@@ -725,11 +724,14 @@ function Classic(base, data) {
 
             if (![Symbol.hasInstance, TARGET, TARGET, NEW_TARGET, "constructor", "__proto__"].includes(prop) && 
                 (typeof(retval) === "function") && 
+                !retval.bound &&
+                ![Object.prototype.isPrototypeOf].includes(retval) &&
                 !/_\$\d{4,}\$_/.test(retval.name) &&
                 ("_super" !== retval.name) &&
                 (!isNative(retval) 
                  || new RegExp(`function ${retval.name}`).test(retval.toString()))) {
-                retval = Function.prototype.bind.call(retval, target[TARGET] || target);
+                retval = Function.prototype.bind.call(retval, receiver[TARGET] || target);
+                retval.bound = true;
             }
 
             return retval;
@@ -902,10 +904,10 @@ function Classic(base, data) {
             pvt.set(pShadow, pvt.get(shadow));
             doubleMapSet(pvt, shadow, pInstance, pvtData);
             //Add the instance to the owner list
-            let ancestry = [].concat(data.ancestry);
-            ancestry.push(pShadow);
-            owners.set(rawInst, ancestry);
-            owners.set(pInstance, ancestry);
+            //let ancestry = [].concat(data.ancestry);
+            //ancestry.push(pShadow);
+            owners.set(rawInst, data.ancestry);
+            owners.set(pInstance, data.ancestry);
         }
     
         let hasCtor = !!data.constructor;
@@ -984,6 +986,9 @@ function Classic(base, data) {
         enumerable: true,
         value: pShadow
     });
+    proxyMap.set(data[Classic.PUBLIC], shadow.prototype);
+    proxyMapR.set(shadow.prototype, data[Classic.PUBLIC]);
+
     Object.setPrototypeOf(shadow, base);
     cloneProperties(shadow, data[Classic.STATIC][Classic.PUBLIC]);
     delete shadow.constructor;  //...but don't add the static constructor!!!
@@ -1017,10 +1022,10 @@ function Classic(base, data) {
     Object.seal(data[Classic.STATIC][Classic.PROTECTED]);
 
     //Register the heritage of the constructor for private access.
-    let ancestry = [].concat(data.ancestry);
-    ancestry.push(pShadow);
-    owners.set(shadow, ancestry);
-    owners.set(pShadow, ancestry);
+    //let ancestry = [].concat(data.ancestry);
+    //ancestry.push(pShadow);
+    owners.set(shadow, data.ancestry);
+    owners.set(pShadow, data.ancestry);
 
     //Call any existing static constructor
     if (data[Classic.STATIC][Classic.PUBLIC].hasOwnProperty("constructor")) {
@@ -1088,11 +1093,11 @@ Object.defineProperties(Classic, {
     },
     CLASSNAME: {
         enumerable: true,
-        get() { return useStrings ? "className" : ClassConfigKeys.CLASSNAME; }
+        get() { return useStrings ? "className" : ClassConfigKeys.ClassName; }
     },
     INHERITMODE: {
         enumerable: true,
-        get() { return useStrings ? "inheritMode" : ClassConfigKeys.INHERITMODE; }
+        get() { return useStrings ? "inheritMode" : ClassConfigKeys.InheritMode; }
     },
     PLACEHOLDER: {
         enumerable: true,

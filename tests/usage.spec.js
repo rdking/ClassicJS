@@ -13,7 +13,10 @@ describe("Testing a base class declaration...", () => {
             className: "Base",
             static: {
                 private: {
-                    pvtMember: 21
+                    pvtMember: 21,
+                    pvtTestA() {
+                        
+                    }
                 },
                 protected: {
                     ptdMember: Math.PI * 2
@@ -58,8 +61,9 @@ describe("Testing a base class declaration...", () => {
     
             test('can call if they are methods', () => {
                 expect(typeof(Base.getData)).toBe("function");
-                expect(typeof(Base.getData())).toBe("object");
-                expect(typeof(Base.getData())).not.toBeNull();
+                let data = Base.getData();
+                expect(typeof(data)).toBe("object");
+                expect(typeof(data)).not.toBeNull();
             });
     
             test('can be used to read non-public static data if they are methods', () => {
@@ -161,6 +165,7 @@ describe("Testing a derived class declaration...", () => {
         describe("Public members", () => {
             test('are accessible', () => {
                 expect(Child).toHaveProperty("pubMember");
+                expect(Child).toHaveProperty("pubMember2");
                 expect(Child).toHaveProperty("getData");
             });
     
@@ -170,24 +175,92 @@ describe("Testing a derived class declaration...", () => {
                 expect(typeof(Child.getData())).not.toBeNull();
             });
     
-            test('can be used to read non-public static data if they are methods', () => {
+            test('can be used to read static data if they are methods', () => {
                 let data = Child.getData();
                 expect(data.pvtMember).toBe(21);
                 expect(data.ptdMember).toBe(Math.PI * 2);
                 expect(typeof(data.pubMember)).toBe("symbol");
                 expect(data.pubMember.toString()).toBe("Symbol(static data)");
+                expect(typeof(data.Child)).toBe("object");
+                expect(data.Child.pvtMember2).toBe(18);
+                expect(data.Child.ptdMember2).toBe(Math.PI * 4);
+                expect(typeof(data.Child.pubMember2)).toBe("symbol");
+                expect(data.Child.pubMember2.toString()).toBe("Symbol(more static data)");
             });
         });
         describe("Protected members", () => {
             test('cannot be accessed externally', () => {
                 expect(Child.ptdMember).toBeUndefined();
                 expect(() => Child.$ptdMember).toThrow();
+                expect(Child.ptdMember2).toBeUndefined();
+                expect(() => Child.$ptdMember2).toThrow();
             });
         });
         describe("Private members", () => {
             test('cannot be accessed externally', () => {
                 expect(Child.pvtMember).toBeUndefined();
                 expect(() => Child.$pvtMember).toThrow();
+                expect(Child.pvtMember2).toBeUndefined();
+                expect(() => Child.$pvtMember2).toThrow();
+            });
+        });
+    });
+    describe("Instance", () => {
+        let instance;
+        beforeAll(() => {
+            instance = new Child();
+        });
+        describe("the instance", () => {
+            test('is an instance of its class and bases', () => {
+                expect(instance).toBeInstanceOf(Child);
+                expect(instance).toBeInstanceOf(Base);
+                expect(instance).toBeInstanceOf(Object);
+            });
+            test('has the appropriate prototypes', () => {
+                expect(Child.prototype.isPrototypeOf(instance)).toBe(true);
+                expect(Base.prototype.isPrototypeOf(instance)).toBe(true);
+            })
+        });
+        describe("Public members", () => {
+            test('are accessible', () => {
+                expect(Child).toHaveProperty("pubMember");
+                expect(Child).toHaveProperty("pubMember2");
+                expect(Child).toHaveProperty("getData");
+            });
+    
+            test('can call if they are methods', () => {
+                expect(typeof(Child.getData)).toBe("function");
+                expect(typeof(Child.getData())).toBe("object");
+                expect(typeof(Child.getData())).not.toBeNull();
+            });
+    
+            test('can be used to read static data if they are methods', () => {
+                let data = Child.getData();
+                expect(data.pvtMember).toBe(21);
+                expect(data.ptdMember).toBe(Math.PI * 2);
+                expect(typeof(data.pubMember)).toBe("symbol");
+                expect(data.pubMember.toString()).toBe("Symbol(static data)");
+                expect(typeof(data.Child)).toBe("object");
+                expect(data.Child.pvtMember2).toBe(18);
+                expect(data.Child.ptdMember2).toBe(Math.PI * 4);
+                expect(typeof(data.Child.pubMember2)).toBe("symbol");
+                expect(data.Child.pubMember2.toString()).toBe("Symbol(more static data)");
+            });
+        });
+        describe("Protected members", () => {
+            test('cannot be accessed externally', () => {
+                expect(Child.ptdMember).toBeUndefined();
+                expect(() => Child.$ptdMember).toThrow();
+                expect(Child.ptdMember2).toBeUndefined();
+                expect(() => Child.$ptdMember2).toThrow();
+            });
+        });
+        describe("Private members", () => {
+            test('cannot be accessed externally', () => {
+                expect(Child.pvtMember).toBeUndefined();
+                expect(() => Child.$pvtMember).toThrow();
+                expect(Child.pvtMember2).toBeUndefined();
+                expect(() => Child.$pvtMember2).toThrow();
             });
         });
     });

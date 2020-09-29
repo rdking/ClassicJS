@@ -1,0 +1,13 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "npm",
+			"script": "watch_tests",
+			"group": "test",
+			"problemMatcher": [],
+			"label": "Jest Testing",
+			"detail": "jest"
+		}
+	]
+}
