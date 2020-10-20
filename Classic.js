@@ -455,11 +455,12 @@ function validateAccess(offset, receiver) {
  * quick guess than a certainty, but it's good enough to avoid getting fooled
  * by the average "bind" usage.
  * @param {Function} fn - Any function.
+ * @param {boolean} bound - true if we're looking for a bound function
  * @returns {boolean}
  */
-function isNative(fn) {
+function isNative(fn, bound) {
     return (typeof(fn) === "function") &&
-           fn.toString().includes(fn.name) &&
+           (bound ||fn.toString().includes(fn.name)) &&
            fn.toString().includes("[native code]");
 }
 
@@ -635,6 +636,26 @@ function Classic(base, data) {
 
     const handler = {
         createSuper(receiver) {
+            let superHandler = {
+                getter: getInstanceHandler(false),
+                get(target, prop, rec) {
+                    let has = proxyMap.has(receiver);
+                    let r = (has) ? proxyMap.get(receiver) : receiver;
+                    let t = (has) ? receiver : target;
+                    let retval = (prop[0] === TRIGGER)
+                        ? this.getter.get(t, prop, r, 1, true)
+                        : Reflect.get(target, prop, rec);
+                    
+                    if ((typeof(retval) === "function") && !isNative(retval, true)) {
+                        retval = new Proxy(retval, {
+                            apply(target, _, args) {
+                                return Reflect.apply(target, receiver, args);
+                            }
+                        });
+                    }
+                    return retval;
+                }
+            };
             let retval = function _super(className) {
                 if (!["function", "string", "undefined"].includes(typeof(className))) {
                     throw new TypeError(`If supplied a parameter, super() must be given a string or function.`)
@@ -657,11 +678,16 @@ function Classic(base, data) {
                 retval[TARGET] = receiver;
                 return retval;
             };
+            Object.defineProperty(retval, "isSuper", { value: true });
             let newProto = (typeof(receiver) === "function") 
                 ? base || null 
                 : (base) 
                     ? base.prototype
                     : null;
+
+            if (newProto) {
+                newProto = new Proxy(newProto, superHandler);
+            }
             Object.setPrototypeOf(retval, newProto);
             let rval = new Proxy(retval, getInstanceHandler(false));
             proxyMapR.set(rval, retval);
@@ -684,7 +710,7 @@ function Classic(base, data) {
 
             return { ptarget, pprop };
         },
-        get(target, prop, receiver, offset) {
+        get(target, prop, receiver, offset, isSuper) {
             let retval;
             offset = offset || 0;
 
@@ -702,19 +728,20 @@ function Classic(base, data) {
                 }
             }
             else if ((typeof(prop) == "string") && (prop[0] === TRIGGER)) {
-                let { ptarget, pprop } = this.privateAccess(prop, target, offset + 1);
+                let { ptarget, pprop } = this.privateAccess(prop, target, offset + 1, isSuper);
+                if (isSuper) {
+                    ptarget = Object.getPrototypeOf(ptarget);
+                }
 
-                if (pprop === Classic.CLASS) {
-                    retval = pShadow;
-                }
-                else {
-                    retval = Reflect.get(ptarget, pprop, receiver);
-                }
+                retval = Reflect.get(ptarget, pprop, receiver);
+            }
+            else if (prop === Classic.CLASS) {
+                retval = pShadow;
             }
             else {
                 let desc = getInheritedPropertyDescriptor(target, prop);
                 if (desc && desc.get && !/_\$\d{4,}\$_/.test(desc.get.name)) {
-                    let context = receiver[TARGET] || target;
+                    let context = receiver[TARGET] || receiver;
                     retval = desc.get.call(context);
                 }
                 else {
@@ -722,7 +749,8 @@ function Classic(base, data) {
                 }
             }
 
-            if (![Symbol.hasInstance, TARGET, TARGET, NEW_TARGET, "constructor", "__proto__"].includes(prop) && 
+            if (![Symbol.hasInstance, TARGET, TARGET, NEW_TARGET,
+                  Classic.CLASS, "constructor", "__proto__"].includes(prop) && 
                 (typeof(retval) === "function") && 
                 !retval.bound &&
                 ![Object.prototype.isPrototypeOf].includes(retval) &&
@@ -783,7 +811,7 @@ function Classic(base, data) {
             needSuper: !!needSuper,
             top_proto: null,
             originalProto: null,
-            get(target, prop, receiver) {
+            get(target, prop, receiver, offset=0, isSuper) {
                 let retval;
                 if (prop === SUPER_CALLED) {
                     this.needSuper = false;
@@ -803,12 +831,12 @@ function Classic(base, data) {
                         prop = UNUSED;
                     }
                     
-                    retval = handler.get(target, prop, receiver, 1);
+                    retval = handler.get(target, prop, receiver, offset + 1, isSuper);
                 }
 
                 return retval;
             },
-            set(target, prop, value, receiver) {
+            set(target, prop, value, receiver, offset=0) {
                 let retval = false;
 
                 if (this.needSuper && (prop !== "super"))
@@ -819,7 +847,7 @@ function Classic(base, data) {
                     retval = true;
                 }
                 else {
-                    retval = handler.set(target, prop, value, receiver, 1);
+                    retval = handler.set(target, prop, value, receiver, offset + 1);
                 }
 
                 return retval;
