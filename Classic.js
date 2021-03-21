@@ -1,7 +1,7 @@
 /**
  * Adds peek() to Array to simplify looking at the top of the stack.
  */
-class Stack extends Array {
+ class Stack extends Array {
     peek(n=0) { return this[this.length - (1 + n)]; }
 }
 
@@ -96,10 +96,43 @@ class FlexibleProxy {
 /**
  * Retrieves the concatenated list of all own string and symbol property names.
  * @param {Object} obj - Object to retrieve keys from.
- * @returns {[]} Array of all property name strings and symbols.
+ * @returns {[]} Array of all own property name strings and symbols.
  */
 function getAllOwnPropertyKeys(obj) {
     return Object.getOwnPropertyNames(obj).concat(Object.getOwnPropertySymbols(obj));
+}
+
+/**
+ * Retrieves the concatenated list of all string and symbol property names,
+ * recursively. This does not retrieve the keys on Object.prototype.
+ * @param {Object} obj - Object to retrieve keys from.
+ * @returns {[]} Array of all property name strings and symbols.
+ */
+function getAllPropertyKeys(obj) {
+    let retval = getAllOwnPropertyKeys(obj);
+    while (![null, Object.prototype].includes(obj = Object.getPrototypeOf(obj))) {
+        retval = retval.concat(getAllOwnPropertyKeys(obj));
+    }
+    return (new Set(retval)).keys();
+}
+
+/**
+ * Returns the property descriptor of any property in the given object,
+ * regardless of whether or not the property is an own property.
+ * @param {Object} obj - Object that owns the named property.
+ * @param {string} prop - Name of the property to look up.
+ * @returns {Object} The property descriptor for the named property, or null
+ * if the property doesn't exist in the object.
+ */
+function getPropertyDescriptor(obj, prop) {
+    let retval = null;
+
+    while (!retval && obj) {
+        retval = Object.getOwnPropertyDescriptor(obj, prop);
+        obj = Object.getPrototypeOf(obj);
+    }
+
+    return retval;
 }
 
 /**
@@ -165,23 +198,20 @@ function mapAccessors(owner, parent, isStatic) {
     if (classDefs.has(parent)) {
         let defs = classDefs.get(parent);
         let src = isStatic ? defs[Classic.STATIC][Classic.PROTECTED] : defs[Classic.PROTECTED];
-        let base = defs.base;
+        let nmKey = isStatic ? parent : proxyMapR.get(parent.prototype) || {};
+        let nameMap = (protMap.get(nmKey) || {}).r;
         let mapping = {f: {}, r: {}}; //forward & reverse mappings
-        let keys = getAllOwnPropertyKeys(src);
+        let keys = getAllPropertyKeys(src);
         retval = {};
     
         for (let key of keys) {
-            mapping.f[key] = Symbol(`${parent.name}::${key}`);
-            mapping.r[mapping.f[key]] = key;
-            Object.defineProperty(retval, mapping.f[key], Object.getOwnPropertyDescriptor(src, key));
+            let fName = (nameMap && key in nameMap) ? nameMap[key] : key;
+            mapping.f[fName] = Symbol(`${parent.name}::${fName.toString()}`);
+            mapping.r[mapping.f[fName]] = fName;
+            Object.defineProperty(retval, mapping.f[fName], getPropertyDescriptor(src, key));
         }
     
         protMap.set(isStatic ? owner : owner.prototype, mapping);
-        
-        if (classDefs.has(base)) {
-            let proto = mapAccessors(owner, base, isStatic);
-            Object.setPrototypeOf(retval, proto);
-        }
     }
 
     return retval;
@@ -204,6 +234,7 @@ function generateAccessors(dest, src, base) {
         Object.defineProperty(dest, key, {
             enumerable: true,
             get() {
+                console.log(`Getting protected value for key "${key}"...`)
                 try {
                     let mkey2 = (typeof(this) === "function")
                         ? base
@@ -388,6 +419,10 @@ function convertData(data, ctor, base) {
     //Link the inherited protected members with the current private members.
     Object.setPrototypeOf(pvt, iProt);
     Object.setPrototypeOf(staticPvt, iStaticProt);
+
+    //Link the inherited protected members with the current protected members as well.
+    Object.setPrototypeOf(prot, iProt);
+    Object.setPrototypeOf(staticProt, iStaticProt);
 
     //Wrap all the functions. No need to wrap the protected blocks.
     convert(pvt, pvt, ctor.prototype);
