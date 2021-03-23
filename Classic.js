@@ -234,7 +234,6 @@ function generateAccessors(dest, src, base) {
         Object.defineProperty(dest, key, {
             enumerable: true,
             get() {
-                console.log(`Getting protected value for key "${key}"...`)
                 try {
                     let mkey2 = (typeof(this) === "function")
                         ? base
