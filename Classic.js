@@ -672,14 +672,16 @@ function Classic(base, data) {
     const handler = {
         createSuper(receiver) {
             let superHandler = {
+                superObj: (typeof(receiver) === "function")
+                    ? Object.getPrototypeOf(stack.peek().owner.constructor)
+                    : Object.getPrototypeOf(stack.peek().owner.constructor).prototype,
                 getter: getInstanceHandler(false),
-                get(target, prop, rec) {
+                get(_, prop, rec) {
                     let has = proxyMap.has(receiver);
                     let r = (has) ? proxyMap.get(receiver) : receiver;
-                    let t = (has) ? receiver : target;
                     let retval = (prop[0] === TRIGGER)
-                        ? this.getter.get(t, prop, r, 1, true)
-                        : Reflect.get(target, prop, rec);
+                        ? this.getter.get(this.superObj, prop, r, 1, true)
+                        : Reflect.get(this.superObj, prop, rec);
                     
                     if ((typeof(retval) === "function") && !isNative(retval, true)) {
                         retval = new Proxy(retval, {
