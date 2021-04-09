@@ -13,11 +13,13 @@ const initFns = new WeakMap;    //Map of initialization functions
 const proxyMap = new WeakMap;   //Map of objects to privileged objects
 const proxyMapR = new WeakMap;  //Map of privileged objects to objects
 const stack = new Stack;        //Function registration used to validate access
+const buildQueue = new WeakMap; //Map of arrays to queue building private data
 
 const TARGET = Symbol("Proxy Target");          //Used to retrieve the target from the proxy
 const UNUSED = Symbol("UNUSED");                //Used to ensure that a property isn't found.
 const SUPER_CALLED = Symbol("SUPER_CALLED");    //Used to enable normal use of `this`.
 const NEW_TARGET = Symbol("NEW_TARGET");        //Used to hide the transfer of new.target from the constructor
+const BUILD_KEY = Symbol("BUILD_KEY");          //Used to pass along the key instance
 
 let useStrings = false;
 let TRIGGER = '$';
@@ -33,12 +35,47 @@ let TRIGGER = '$';
  */ 
 
 /**
+ * @typedef CJSProxy
+ * This is a proxy used to maintain the mapping between the original instance
+ * and the newly created proxy.
+ */
+class CJSProxy {
+    constructor(instance, handler) {
+        let retval = new Proxy(instance, handler);
+        proxyMap.set(instance, retval);
+        proxyMapR.set(retval, instance);
+        return retval;
+    }
+
+    static getInstance(obj) {
+        return proxyMapR.has(obj) ? proxyMapR.get(obj) : obj;
+    }
+
+    static getProxy(obj) {
+        return proxyMap.has(obj) ? proxyMap.get(obj) : obj;
+    }
+
+    static getPair(obj) {
+        return {
+            instance: this.getInstance(obj),
+            proxy: this.getProxy(obj)
+        };
+    }
+
+    static delete(obj) {
+        let { instance:inst, proxy } = this.getPair(obj);
+        proxyMap.delete(inst);
+        proxyMapR.delete(proxy);
+    }
+}
+
+/**
  * @typedef FlexibleProxy
  * This is a proxy that allows it's target to be altered.
  */
 class FlexibleProxy {
     constructor(instance, newTarget, handler, needSuper) {
-        let retval = new Proxy(instance, {
+        let retval = new CJSProxy(instance, {
             current: instance,
             get(tgt, prop, receiver) {
                 let retval;
@@ -82,7 +119,6 @@ class FlexibleProxy {
                 return retval;
             }
         });
-        proxyMapR.set(retval, instance);
         return retval;
     }
 
@@ -187,93 +223,105 @@ function doubleMapSet(map, key1, key2, value) {
  * are saved in protMap.
  * @param {Function} owner - The constructor of the class that will own the
  * mapping being created.
+ * @param {Object} defs - The definition object for the owner class.
  * @param {Object} parent - The constructor of the class that owns the
  * properties to remap.
  * @param {Boolean} isStatic - Uses the static protected properties if true.
  * @returns {Object} The newly created mapping of accessors.
  */
-function mapAccessors(owner, parent, isStatic) {
+function mapAccessors(owner, defs, parent, isStatic) {
     let retval = null;
+    let mapping = {f: {}, r: {}}; //forward & reverse mappings
+
+    //TODO: REMEMBER TO ACCOUNT FOR OVERRIDES!!!!
 
     if (classDefs.has(parent)) {
-        let defs = classDefs.get(parent);
-        let src = isStatic ? defs[Classic.STATIC][Classic.PROTECTED] : defs[Classic.PROTECTED];
+        let pDefs = classDefs.get(parent);
+        let pSrc = isStatic ? pDefs[Classic.STATIC][Classic.PROTECTED] : pDefs[Classic.PROTECTED];
+        let oSrc = isStatic ? defs[Classic.STATIC][Classic.PROTECTED] : defs[Classic.PROTECTED];
         let nmKey = isStatic ? parent : proxyMapR.get(parent.prototype) || {};
         let nameMap = (protMap.get(nmKey) || {}).r;
-        let mapping = {f: {}, r: {}}; //forward & reverse mappings
-        let keys = getAllPropertyKeys(src);
+        let keys = getAllPropertyKeys(pSrc);
         retval = {};
     
         for (let key of keys) {
-            let fName = (nameMap && key in nameMap) ? nameMap[key] : key;
-            mapping.f[fName] = Symbol(`${parent.name}::${fName.toString()}`);
-            mapping.r[mapping.f[fName]] = fName;
-            Object.defineProperty(retval, mapping.f[fName], getPropertyDescriptor(src, key));
+            if (!(key in oSrc)) {
+                let fName = (nameMap && key in nameMap) ? nameMap[key] : key;
+                mapping.f[fName] = Symbol(`${parent.name}::${fName.toString()}`);
+                mapping.r[mapping.f[fName]] = fName;
+                Object.defineProperty(retval, mapping.f[fName], getPropertyDescriptor(pSrc, key));
+            }
         }
-    
-        protMap.set(isStatic ? owner : owner.prototype, mapping);
     }
+    
+    protMap.set(isStatic ? owner : owner.prototype, mapping);
 
     return retval;
 }
 
 /**
- * Generates an accessor to get/set protected members, assigning a Symbol to
- * each property so names are class-specific, and preserving the resulting 
- * name:symbol map.
+ * Generates an initialization function for each key in the protected key
+ * template. The initialization function creates an accessor to get/set the
+ * protected member.
  * @param {Object} dest - Object to receive the generated accessor properties
  * @param {Object} src - Object containing the source properties
- * @param {(Object|Function)} base - Primary key used to determine what
  * will be retrieved (static or instance data, and for what class).
  */
-function generateAccessors(dest, src, base) {
+function generateAccessorGenerators(dest, src, base) {
     let keys = getAllOwnPropertyKeys(src);
 
     //Generate a 2-way mapping for the protected keys.
     for (let key of keys) {
         Object.defineProperty(dest, key, {
-            enumerable: true,
-            get() {
-                try {
-                    let mkey2 = (typeof(this) === "function")
-                        ? base
-                        : this;
-                    return doubleMapGet(pvt, base, mkey2[TARGET])[key];
-                }
-                catch(e) {
-                    let name = "<anonymous>";
-                    if (typeof(base) === "function") {
-                        name = base.name || name
+            configurable: true,
+            value: function generateAccessor(newKey) {
+                let data = this;
+                Object.defineProperty(this, newKey, {
+                    enumerable: true,
+                    get() {
+                        let retval;
+                        try {
+                            let mkey = (typeof(this) == "function") ? base : this;
+                            retval = doubleMapGet(pvt, base, mkey[TARGET])[key];
+                        }
+                        catch(e) {
+                            let name = "<anonymous>";
+                            if (typeof(base) === "function") {
+                                name = base.name || name
+                            }
+                            else if ((typeof(base) === "object") &&
+                                        (typeof(base.constructor === "function"))) {
+                                name = base.constructor.name || name;
+                            }
+                            throw new SyntaxError(`Failed to get property: ${name}::${key.toString()}`, e);
+                        }
+                        return retval;
+                    },
+                    set(v) {
+                        try {
+                            let mkey2 = (typeof(this) === "function")
+                                ? base
+                                : this;
+                            doubleMapGet(pvt, base, mkey2[TARGET])[key] = v;
+                        }
+                        catch(e) {
+                            let name = "<anonymous>";
+                            if (typeof(base) === "function") {
+                                name = base.name || name
+                            }
+                            else if ((typeof(base) === "object") &&
+                                        (typeof(base.constructor === "function"))) {
+                                name = base.constructor.name || name;
+                            }
+                            throw new SyntaxError(`Failed to set property: ${name}::${key.toString()}`, e);
+                        }
                     }
-                    else if ((typeof(base) === "object") &&
-                             (typeof(base.constructor === "function"))) {
-                        name = base.constructor.name || name;
-                    }
-                    throw new SyntaxError(`Failed to get property: ${name}::${key.toString()}`, e);
-                }
-            },
-            set(v) {
-                try {
-                    let mkey2 = (typeof(this) === "function")
-                        ? base
-                        : this;
-                    doubleMapGet(pvt, base, mkey2[TARGET])[key] = v;
-                }
-                catch(e) {
-                    let name = "<anonymous>";
-                    if (typeof(base) === "function") {
-                        name = base.name || name
-                    }
-                    else if ((typeof(base) === "object") &&
-                             (typeof(base.constructor === "function"))) {
-                        name = base.constructor.name || name;
-                    }
-                    throw new SyntaxError(`Failed to set property: ${name}::${key.toString()}`, e);
-                }
+                });
             }
         });
     }
 }
+
 
 /**
  * Wraps fn with a uniquely identifiable function that ensures privileged
@@ -403,8 +451,8 @@ function convertData(data, ctor, base) {
     cloneProperties(staticPvt, data[Classic.STATIC][Classic.PROTECTED]);
 
     //Replace the protected members with accessor properties.
-    generateAccessors(prot, data[Classic.PROTECTED], ctor);
-    generateAccessors(staticProt, data[Classic.STATIC][Classic.PROTECTED], ctor);
+    generateAccessorGenerators(prot, data[Classic.PROTECTED], ctor);
+    generateAccessorGenerators(staticProt, data[Classic.STATIC][Classic.PROTECTED], ctor);
 
     //Wrap the public data. We need to fixup prototypes before running mapAccessors.
     convert(pub, data[Classic.PUBLIC], ctor.prototype);
@@ -412,8 +460,8 @@ function convertData(data, ctor, base) {
     ctor.prototype = pub;
 
     //Map the inherited protected members with the current protected members.
-    let iProt = mapAccessors(ctor, base);
-    let iStaticProt = mapAccessors(ctor, base, true);
+    let iProt = mapAccessors(ctor, data, base);
+    let iStaticProt = mapAccessors(ctor, data, base, true);
 
     //Link the inherited protected members with the current private members.
     Object.setPrototypeOf(pvt, iProt);
@@ -454,10 +502,12 @@ function convertData(data, ctor, base) {
  * has the right to access private members of the receiver.
  * @param {Number} offset - Count of library functions in the call stack.
  * @param {Object} receiver - Context object against which the request was made.
+ * @param {Boolean} isSuper - if true, then the target class changes to the
+ * parent of the owner of the current privileged function.
  * @returns {(Function|undefined)} The class constructor the current function
  * and receiver are allowed to access.
  */
-function validateAccess(offset, receiver) {
+function validateAccess(offset, receiver, isSuper) {
     let eStack = (new Error).stack.split(/\n/);
     let fn = stack.peek();
 
@@ -468,20 +518,24 @@ function validateAccess(offset, receiver) {
     if (!eStack[3 + offset].includes(fn.name))
         throw new SyntaxError(`Invalid private access specifier encountered.`);
 
+    let instanceClass = (typeof(receiver) !== "function") ? receiver.constructor : receiver;
     let targetClass = owners.get(fn);
-    let validClasses = owners.has(receiver)
+    let validClasses = owners.has(instanceClass)
         ? owners.get(receiver)
         : owners.get(receiver[TARGET]);
 
     if (typeof(targetClass) !== "function") {
-        targetClass = targetClass.constructor;
-        targetClass = proxyMap.get(targetClass) || targetClass;
+        targetClass = CJSProxy.getProxy(targetClass.constructor);
+    }
+
+    if (isSuper) {
+        targetClass = Object.getPrototypeOf(targetClass);
     }
 
     if (!(validClasses && validClasses.includes(targetClass)))
         throw new SyntaxError(`Invalid private access specifier encountered.`);
 
-    return targetClass;
+    return { targetClass, instanceClass };
 }
 
 /**
@@ -502,14 +556,29 @@ function isNative(fn, bound) {
  * The super constructor-calling function.
  * @param {*} inst - The instance object for the class being constructed
  * @param {*} base - The superclass that needs to be initialized
+ * @param {*} keyInst - The fake instance created by the initiating descendant class
  * @param  {...any} args - Arguments to the superclass constructor
  * @returns {any} - the result of initializing the superclass
  */
-function Super(inst, base, ...args) {
+function Super(inst, base, keyInst, ...args) {
     let newTarget = inst[NEW_TARGET];
 
+    //Pass the key instance to the constructor of the ancestor
+    base[BUILD_KEY] = keyInst;
+
     //Replace the target so the running constructor has the right object.
-    inst[TARGET] = Reflect.construct(base, args, newTarget);
+    let newInst = Reflect.construct(base, args, newTarget);
+    inst[TARGET] = newInst;
+    base[BUILD_KEY] = null;
+
+    if (isNative(base)) {
+        //Run through and initialize all the private areas.
+        let queue = buildQueue.get(keyInst);
+        while (queue.length) {
+            let fn = queue.pop();
+            fn(newInst);
+        }
+    }
     
     return inst;
 }
@@ -675,11 +744,12 @@ function Classic(base, data) {
                     ? Object.getPrototypeOf(stack.peek().owner.constructor)
                     : Object.getPrototypeOf(stack.peek().owner.constructor).prototype,
                 getter: getInstanceHandler(false),
+
                 get(_, prop, rec) {
-                    let has = proxyMap.has(receiver);
-                    let r = (has) ? proxyMap.get(receiver) : receiver;
+                    //TODO: Fix this so that it does a proper "super" lookup
+                    let {proxy: r, instance: t} = CJSProxy.getPair(receiver);
                     let retval = (prop[0] === TRIGGER)
-                        ? this.getter.get(this.superObj, prop, r, 1, true)
+                        ? this.getter.get(t, prop, r, 1, true)
                         : Reflect.get(this.superObj, prop, rec);
                     
                     if ((typeof(retval) === "function") && !isNative(retval, true)) {
@@ -725,23 +795,52 @@ function Classic(base, data) {
                 newProto = new Proxy(newProto, superHandler);
             }
             Object.setPrototypeOf(retval, newProto);
-            let rval = new Proxy(retval, getInstanceHandler(false));
-            proxyMapR.set(rval, retval);
-
+            new CJSProxy(retval, getInstanceHandler(false));
             return retval;
         },
-        privateAccess(prop, receiver, offset) {
-            let targetClass = validateAccess(offset, receiver);
-            let pprop = prop.substr(1);
-            let pKey = (typeof(receiver) === "function")
-                ? targetClass
-                : targetClass.prototype[TARGET];
+        privateAccess(prop, receiver, offset, isSuper) {
+            let {targetClass, instanceClass} = validateAccess(offset, receiver, isSuper);
+            let propName = prop.substr(1);
             let tKey = receiver[TARGET] || receiver;
+            let piTarget = doubleMapGet(pvt, instanceClass, tKey);
+            let ptTarget = doubleMapGet(pvt, targetClass, tKey);
+            let pKey = (typeof(receiver) === "function")
+                ? instanceClass
+                : instanceClass.prototype[TARGET];
             let nameMap = (protMap.get(pKey) || {}).f;
-            let ptarget = doubleMapGet(pvt, targetClass, tKey);
+            let ptarget, pprop;
 
-            if (nameMap && (pprop in nameMap)) {
-                pprop = nameMap[pprop];
+            if (nameMap && (propName in nameMap)) {
+                pprop = nameMap[propName];
+            }
+            else {
+                pprop = propName;
+            }
+
+            if (!isSuper && piTarget && (pprop in piTarget) &&
+                !Object.prototype.hasOwnProperty.call(piTarget, pprop)) {
+                
+                ptarget = piTarget;
+            }
+            else {
+                pKey = (typeof(receiver) === "function")
+                    ? targetClass
+                    : targetClass.prototype[TARGET];
+                nameMap = (protMap.get(pKey) || {}).f;
+
+                if (nameMap && (propName in nameMap)) {
+                    pprop = nameMap[propName];
+                }
+                else {
+                    pprop = propName;
+                }
+
+                if (ptTarget && (pprop in ptTarget)) {
+                    ptarget = ptTarget;
+                }
+                else {
+                    throw new SyntaxError(`Invalid private access specifier encountered.`);
+                }
             }
 
             return { ptarget, pprop };
@@ -765,10 +864,6 @@ function Classic(base, data) {
             }
             else if ((typeof(prop) == "string") && (prop[0] === TRIGGER)) {
                 let { ptarget, pprop } = this.privateAccess(prop, target, offset + 1, isSuper);
-                if (isSuper) {
-                    ptarget = Object.getPrototypeOf(ptarget);
-                }
-
                 retval = Reflect.get(ptarget, pprop, receiver);
             }
             else if (prop === Classic.CLASS) {
@@ -940,7 +1035,8 @@ function Classic(base, data) {
             return new ${className}(...args);
             // throw new TypeError("Class constructor ${className} cannot be invoked without 'new'");
         }
-        
+
+        let keyInst = shadow[BUILD_KEY];
         let proto = Object.getPrototypeOf(this);
         let inheritMode = classDefs.get(shadow)[Classic.INHERITMODE];
     
@@ -952,76 +1048,71 @@ function Classic(base, data) {
         }
     
         function initData(instance) {
-            //Instance might be a FlexibleProxy. We need the real raw instance.
-            let rawInst = instance[TARGET] || instance;
-            //Create and save a proxy to use internally. Yup, an instance is an inverse membrane!
-            let pInstance = new Proxy(rawInst, getInstanceHandler());
-            proxyMap.set(rawInst, pInstance);
-            proxyMapR.set(pInstance, rawInst);
+            //Create a proxy to use internally. Yup, an instance is an inverse membrane!
+            let pInstance = proxyMap.has(instance)
+                ? proxyMap.get(instance)
+                : new CJSProxy(instance, getInstanceHandler());
             //Create the private data pool.
             let pvtData = Object.create(data[Classic.PRIVATE]);
+            let keys = Object.getOwnPropertySymbols((protMap.get(shadow.prototype[TARGET]) || {}).r);
+            for (let key of keys) {
+                pvtData[key](key);
+            }
             //Initialize the public and private data.
-            runInitializers(rawInst, shadow.prototype);
+            runInitializers(instance, shadow.prototype);
             runInitializers(pvtData, data[Classic.PRIVATE]);
             //Save the private data
-            doubleMapSet(pvt, shadow, rawInst, pvtData);
+            doubleMapSet(pvt, shadow, instance, pvtData);
             pvt.set(pShadow, pvt.get(shadow));
             doubleMapSet(pvt, shadow, pInstance, pvtData);
             //Add the instance to the owner list
-            //let ancestry = [].concat(data.ancestry);
-            //ancestry.push(pShadow);
-            owners.set(rawInst, data.ancestry);
+            owners.set(instance, data.ancestry);
             owners.set(pInstance, data.ancestry);
         }
     
+        let needSuper = (base !== Object);
         let hasCtor = !!data.constructor;
-        let retval, 
-            ancestor = hasCtor ? data.constructor : base,
-            superProto = Object.create(proto, {
-                fake: {
-                    configurable: true,
-                    value: true
-                },
-                super: {
-                    configurable: true,
-                    value: function _super(...args) {
-                        this[SUPER_CALLED] = true;
-                        let instance = Super(this, base, ...args);
-                        initData(instance[TARGET]);
-                        return instance;
-                    }
+        let ancestor = hasCtor ? data.constructor : base;
+        let superProto = Object.create(proto, {
+            fake: {
+                configurable: true,
+                value: true
+            },
+            super: {
+                configurable: true,
+                value: function _super(...args) {
+                    this[SUPER_CALLED] = true;
+                    let instance = Super(this, base, keyInst, ...args);
+                    return instance;
                 }
-            }),
-            initProto = new Proxy(superProto, handler);
+            }
+        });
+        let initProto = new CJSProxy(superProto, handler);
+        let fakeInst = Object.create(initProto);
+        let instance = new FlexibleProxy(fakeInst, new.target, handler, needSuper);
+        let retval;
+
+        owners.set(fakeInst, data.ancestry);
+        owners.set(instance, data.ancestry);
+        keyInst = keyInst || instance;
         
-        proxyMapR.set(initProto, superProto)
-        
-        
+        if (!buildQueue.has(keyInst)) {
+            buildQueue.set(keyInst, []);
+        }
+
+        let queue = buildQueue.get(keyInst);
+        queue.push(initData.bind(instance));
+
         //Didn't provide a public constructor function
         if (!hasCtor) {
-            retval = Reflect.construct(ancestor, args, new.target);
-            initData(retval);
+            retval = Super(instance, base, keyInst || instance, ...args);
         } 
         else { //Provided a public constructor
-            let needSuper = (base !== Object);
-            let instance = this;
-            
-            if (needSuper) {
-                instance = new FlexibleProxy(Object.create(initProto), new.target, handler, needSuper)
-            }
-            else {
-                //Init the data if super() won't be called.
-                initData(instance);
-                instance = proxyMap.get(instance);
-            }
-    
             //Run the constructor function.
-            if (ancestor === Object) {
-                retval = instance[TARGET] || instance;
+            if (!needSuper || (ancestor === Object)) {
+                Super(instance, base, keyInst || instance, ...args);
             }
-            else {
-                retval = ancestor.apply(instance, args);
-            }
+            retval = ancestor.apply(instance, args);
     
             if (retval === void 0) {
                 retval = needSuper
@@ -1029,29 +1120,29 @@ function Classic(base, data) {
                     : this;
             }
         }
+
+        owners.delete(fakeInst);
+        owners.delete(instance);
+        CJSProxy.delete(initProto);
+        CJSProxy.delete(instance);
        
         //Return the unproxied version. We want to be Custom Elements compliant!
         return retval;
     })
-    //# sourceURL=${className}.js    
+    //# sourceURL=${window.location.origin}/generatedConstructors/${className}.js    
     `);
 
     //Proxy the internal constructor function.
-    let pShadow = new Proxy(shadow, getInstanceHandler());
-    proxyMap.set(shadow, pShadow);
-    proxyMapR.set(pShadow, shadow);
-    
+    let pShadow = new CJSProxy(shadow, getInstanceHandler());
     //Reify the class definition.
     data = convertData(data, pShadow, base);
 
     //Fixup the class constructor...
-    shadow.prototype = new Proxy(data[Classic.PUBLIC], handler);
+    shadow.prototype = new CJSProxy(data[Classic.PUBLIC], handler);
     Object.defineProperty(shadow.prototype, "constructor", {
         enumerable: true,
         value: pShadow
     });
-    proxyMap.set(data[Classic.PUBLIC], shadow.prototype);
-    proxyMapR.set(shadow.prototype, data[Classic.PUBLIC]);
 
     Object.setPrototypeOf(shadow, base);
     cloneProperties(shadow, data[Classic.STATIC][Classic.PUBLIC]);
@@ -1064,7 +1155,11 @@ function Classic(base, data) {
     //Create the static private data object.
     {
         let spvtData = Object.create(data[Classic.STATIC][Classic.PRIVATE]);
-        
+        let keys = Object.getOwnPropertySymbols(protMap.get(pShadow).r);
+        for (let key of keys) {
+            spvtData[key](key);
+        }
+    
         doubleMapSet(pvt, shadow, shadow, spvtData);
         pvt.set(pShadow, pvt.get(shadow));
         doubleMapSet(pvt, pShadow, pShadow, spvtData);
@@ -1079,15 +1174,11 @@ function Classic(base, data) {
         }
     });
 
-    //Seal up everything not private
+    //Seal up everything private
     Object.seal(data[Classic.PRIVATE]);
-    Object.seal(data[Classic.PROTECTED]);
     Object.seal(data[Classic.STATIC][Classic.PRIVATE]);
-    Object.seal(data[Classic.STATIC][Classic.PROTECTED]);
 
     //Register the heritage of the constructor for private access.
-    //let ancestry = [].concat(data.ancestry);
-    //ancestry.push(pShadow);
     owners.set(shadow, data.ancestry);
     owners.set(pShadow, data.ancestry);
 
