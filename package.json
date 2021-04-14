@@ -1,6 +1,6 @@
 {
   "name": "classicjs",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A JavaScript class implementation with support for private, protected, and public, as well as HTML Custom Elements. Also provides support for instance initialization in the declaration.",
   "main": "Classic.js",
   "directories": {

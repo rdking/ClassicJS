@@ -327,7 +327,6 @@ function generateAccessorGenerators(dest, src, base) {
     }
 }
 
-
 /**
  * Wraps fn with a uniquely identifiable function that ensures privileged
  * member functions can be identified.
@@ -337,6 +336,12 @@ function generateAccessorGenerators(dest, src, base) {
  */
 function makePvtName(fn, owner) {
     let name = makeFnName();
+    let className = (typeof(owner) === "function") 
+        ? `${owner.name}/static`
+        : ("displayName" in owner.constructor)
+            ? owner.constructor.displayName.split(" ")[0]
+            : owner.constructor.name;
+    let path = className + `/${fn.name.replace(" ", "-")}.js`;
     let retval = eval(`
         (function ${name}(...args) {
             let inst = proxyMap.get(this) || this;
@@ -345,6 +350,7 @@ function makePvtName(fn, owner) {
             stack.pop();
             return retval;
         })
+        //# sourceURL=${window.location.origin}/ClassicJSGenerated/${path}
     `);
 
     Object.defineProperties(retval, {
@@ -1055,15 +1061,11 @@ function Classic(base, data) {
     
         function initData(instance) {
             //Create a proxy to use internally. Yup, an instance is an inverse membrane!
-            let pInstance = proxyMap.has(instance)
-                ? proxyMap.get(instance)
-                : new CJSProxy(instance, getInstanceHandler());
+            let pInstance = proxyMap.get(instance);
             //Create the private data pool.
             let pvtData = Object.create(data[Classic.PRIVATE]);
             let keys = Object.getOwnPropertySymbols((protMap.get(shadow.prototype[TARGET]) || {}).r);
-            for (let key of keys) {
-                pvtData[key](key);
-            }
+            for (let key of keys) { pvtData[key](key); }
             //Initialize the public and private data.
             runInitializers(instance, shadow.prototype);
             runInitializers(pvtData, data[Classic.PRIVATE]);
@@ -1131,7 +1133,7 @@ function Classic(base, data) {
         //Return the unproxied version. We want to be Custom Elements compliant!
         return retval;
     })
-    //# sourceURL=${window.location.origin}/generatedConstructors/${className}.js    
+    //# sourceURL=${window.location.origin}/ClassicJSGenerated/${className}/ClassJS-constructor.js    
     `);
 
     //Proxy the internal constructor function.
@@ -1224,9 +1226,6 @@ Object.defineProperties(Classic, {
             }
         }
     },
-    /**
-     * 
-     */
     UseStrings: {
         enumerable: true,
         get() { return useStrings; },
