@@ -339,7 +339,7 @@ function makePvtName(fn, owner) {
     let className = (typeof(owner) === "function") 
         ? `${owner.name}/static`
         : ("displayName" in owner.constructor)
-            ? owner.constructor.displayName.split(" ")[0]
+            ? owners.get(owner.constructor).constructor.name
             : owner.constructor.name;
     let path = className + `/${fn.name.replace(" ", "-")}.js`;
     let retval = eval(`
