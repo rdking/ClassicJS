@@ -100,6 +100,11 @@ class FlexibleProxy {
                 switch (prop) {
                     case TARGET:
                         this.current = value;
+                        proxyMap.delete(instance);
+                        proxyMap.set(value, receiver);
+                        proxyMapR.set(receiver, value);
+                        owners.set(value, owners.get(instance));
+                        owners.delete(instance);
                         break;
                     case SUPER_CALLED:
                         if (needSuper)
@@ -521,8 +526,8 @@ function validateAccess(offset, receiver, isSuper) {
     let instanceClass = (typeof(receiver) !== "function") ? receiver.constructor : receiver;
     let targetClass = owners.get(fn);
     let validClasses = owners.has(instanceClass)
-        ? owners.get(receiver)
-        : owners.get(receiver[TARGET]);
+        ? owners.get(instanceClass)
+        : owners.get(instanceClass[TARGET]);
 
     if (typeof(targetClass) !== "function") {
         targetClass = CJSProxy.getProxy(targetClass.constructor);
@@ -578,6 +583,7 @@ function Super(inst, base, keyInst, ...args) {
             let fn = queue.pop();
             fn(newInst);
         }
+        buildQueue.delete(keyInst);
     }
     
     return inst;
@@ -801,7 +807,7 @@ function Classic(base, data) {
         privateAccess(prop, receiver, offset, isSuper) {
             let {targetClass, instanceClass} = validateAccess(offset, receiver, isSuper);
             let propName = prop.substr(1);
-            let tKey = receiver[TARGET] || receiver;
+            let tKey = CJSProxy.getInstance(receiver);
             let piTarget = doubleMapGet(pvt, instanceClass, tKey);
             let ptTarget = doubleMapGet(pvt, targetClass, tKey);
             let pKey = (typeof(receiver) === "function")
@@ -863,7 +869,7 @@ function Classic(base, data) {
                 }
             }
             else if ((typeof(prop) == "string") && (prop[0] === TRIGGER)) {
-                let { ptarget, pprop } = this.privateAccess(prop, target, offset + 1, isSuper);
+                let { ptarget, pprop } = this.privateAccess(prop, receiver, offset + 1, isSuper);
                 retval = Reflect.get(ptarget, pprop, receiver);
             }
             else if (prop === Classic.CLASS) {
@@ -924,7 +930,7 @@ function Classic(base, data) {
             else {
                 let desc = getInheritedPropertyDescriptor(target, prop);
                 if (desc && desc.set && !/_\$\d{4,}\$_/.test(desc.set.name)) {
-                    let context = receiver[TARGET] || target;
+                    let context = CJSProxy.getInstance(receiver, target);
                     desc.set.call(context, value);
                     retval = true;
                 }
@@ -1089,7 +1095,7 @@ function Classic(base, data) {
         });
         let initProto = new CJSProxy(superProto, handler);
         let fakeInst = Object.create(initProto);
-        let instance = new FlexibleProxy(fakeInst, new.target, handler, needSuper);
+        let instance = new FlexibleProxy(fakeInst, new.target, getInstanceHandler(), needSuper);
         let retval;
 
         owners.set(fakeInst, data.ancestry);
@@ -1105,26 +1111,22 @@ function Classic(base, data) {
 
         //Didn't provide a public constructor function
         if (!hasCtor) {
-            retval = Super(instance, base, keyInst || instance, ...args);
+            retval = Super(instance, base, keyInst, ...args);
         } 
         else { //Provided a public constructor
             //Run the constructor function.
             if (!needSuper || (ancestor === Object)) {
-                Super(instance, base, keyInst || instance, ...args);
+                Super(instance, base, keyInst, ...args);
             }
             retval = ancestor.apply(instance, args);
     
             if (retval === void 0) {
-                retval = needSuper
-                    ? instance[TARGET]
-                    : this;
+                retval = instance[TARGET];
             }
         }
 
         owners.delete(fakeInst);
-        owners.delete(instance);
         CJSProxy.delete(initProto);
-        CJSProxy.delete(instance);
        
         //Return the unproxied version. We want to be Custom Elements compliant!
         return retval;
@@ -1285,6 +1287,12 @@ Object.defineProperties(Classic, {
         value: function getInitValue(placeholder) {
             if (initFns.has(placeholder))
                 return initFns.get(placeholder)();
+        }
+    },
+    getInstance: {
+        enumerable: true,
+        value: function getInstance(obj) {
+            return CJSProxy.getInstance(obj);
         }
     }
 }); 

@@ -1,5 +1,5 @@
 # ClassicJS
-This is a library designed to provide fully privileged member support to ES6 classes. ClassicJS is little more than a wrapper function. However, unlike the great many other wrapper functions out there, this one doesn't focus on wrapping the target class. You can choose to wrap a new target class, an existing base class, or even no class at all. All you really need is a prototype object. ClassicJS will generate a class for you from that.
+This is a library designed to provide fully privileged member support to ES6 classes. This means you get the full treatment of the access specifiers you may have become accustomed to when using lanugages like C#, Java, & C++. You get all of this without losing support for any of the existing language features.
 
 ## Features
 * Private & Protected members on instances, even when Proxy-wrapped.
@@ -340,3 +340,8 @@ ctor = a.cla$$;
 ```
 
 I decided to use those "$" for the same reason as creating the Symbol key names. Plus, it's enough of a visual break to let you know that this is not a normal member of your class. With this, even if someone deletes the constructor from your prototype, and your class is anonymous, as long as you have an instance, you have access to the constructor.
+
+### Constructor `this` value
+The constructor function of a class is a black box controlled by the JS engine. As such, there is no way to directly alter the value of `this` in a constructor after it is running. I needed to get around this problem to allow for `this.super()` as well as to stage the private and protected object properties during object construction. This meant setting up `this` as a proxy object before calling the user constructor.
+
+If you have operations not a part of the class that will need to see the real value of `this` instead of the proxy, there is `Classic.getInstance()`. Given the `this` value as a parameter, it will return the actual instance value that will be returned from the constructor. With this, you can even set up your own Map, or pass around the real value of `this` from the constructor and be assured that later access by member functions of this class will work correctly.
