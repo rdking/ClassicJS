@@ -764,10 +764,11 @@ function Classic(base, data) {
                         ? this.getter.get(t, prop, r, 1, true)
                         : Reflect.get(this.superObj, prop, rec);
                     
-                    if ((typeof(retval) === "function") && !isNative(retval, true)) {
+                    if (typeof(retval) === "function") {
                         retval = new Proxy(retval, {
                             apply(target, _, args) {
-                                return Reflect.apply(target, receiver, args);
+                                return Reflect.apply(target, isNative(retval, true) 
+                                    ? CJSProxy.getInstance(receiver) : receiver, args);
                             }
                         });
                     }
@@ -798,10 +799,7 @@ function Classic(base, data) {
             };
             Object.defineProperty(retval, "isSuper", { value: true });
             let newProto = (typeof(receiver) === "function") 
-                ? base || null 
-                : (base) 
-                    ? base.prototype
-                    : null;
+                ? base || null : ((base) ? base.prototype : null);
 
             if (newProto) {
                 newProto = new Proxy(newProto, superHandler);
