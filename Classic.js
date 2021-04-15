@@ -573,6 +573,7 @@ function isNative(fn, bound) {
  */
 function Super(inst, base, keyInst, ...args) {
     let newTarget = inst[NEW_TARGET];
+    inst[SUPER_CALLED] = true;
 
     //Pass the key instance to the constructor of the ancestor
     base[BUILD_KEY] = keyInst;
@@ -1087,7 +1088,6 @@ function Classic(base, data) {
             super: {
                 configurable: true,
                 value: function _super(...args) {
-                    this[SUPER_CALLED] = true;
                     let instance = Super(this, base, keyInst, ...args);
                     return instance;
                 }
@@ -1119,12 +1119,9 @@ function Classic(base, data) {
                 Super(instance, base, keyInst, ...args);
             }
             retval = ancestor.apply(instance, args);
-    
-            if (retval === void 0) {
-                retval = instance[TARGET];
-            }
         }
 
+        retval = (retval === void 0) ? instance[TARGET] : retval[TARGET];
         owners.delete(fakeInst);
         CJSProxy.delete(initProto);
        
