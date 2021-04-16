@@ -900,7 +900,7 @@ function Classic(base, data) {
                 ("_super" !== retval.name) &&
                 (!isNative(retval) 
                  || new RegExp(`function ${retval.name}`).test(retval.toString()))) {
-                retval = Function.prototype.bind.call(retval, receiver[TARGET] || target);
+                retval = Function.prototype.bind.call(retval, CJSProxy.getInstance(receiver));
                 retval.bound = true;
             }
 
