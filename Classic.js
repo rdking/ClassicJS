@@ -891,15 +891,10 @@ function Classic(base, data) {
                 }
             }
 
-            if (![Symbol.hasInstance, TARGET, TARGET, NEW_TARGET,
-                  Classic.CLASS, "constructor", "__proto__"].includes(prop) && 
-                (typeof(retval) === "function") && 
-                !retval.bound &&
-                ![Object.prototype.isPrototypeOf].includes(retval) &&
-                !/_\$\d{4,}\$_/.test(retval.name) &&
-                ("_super" !== retval.name) &&
-                (!isNative(retval) 
-                 || new RegExp(`function ${retval.name}`).test(retval.toString()))) {
+            let exclusions = [Symbol.hasInstance, TARGET, NEW_TARGET, 
+                Classic.CLASS, "constructor"];
+            if (!exclusions.includes(prop) && (typeof(retval) === "function") &&
+                !retval.bound && (owners.get(retval) !== void 0)) {
                 retval = Function.prototype.bind.call(retval, CJSProxy.getInstance(receiver));
                 retval.bound = true;
             }
