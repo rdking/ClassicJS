@@ -75,9 +75,9 @@ class CJSProxy {
  */
 class FlexibleProxy {
     constructor(instance, newTarget, handler, needSuper) {
-        let retval = new CJSProxy(instance, {
+        let retval = new CJSProxy({}, {
             current: instance,
-            get(tgt, prop, receiver) {
+            get(_, prop, receiver) {
                 let retval;
                 switch (prop) {
                     case NEW_TARGET:
@@ -95,7 +95,7 @@ class FlexibleProxy {
                 }
                 return retval;
             },
-            set(tgt, prop, value, receiver) {
+            set(_, prop, value, receiver) {
                 let retval = true;
                 switch (prop) {
                     case TARGET:
@@ -122,7 +122,16 @@ class FlexibleProxy {
                         }
                 }
                 return retval;
-            }
+            },
+            defineProperty(_, prop, desc) { return handler.defineProperty(this.current, prop, desc); },
+            deleteProperty(_, prop) { return Reflect.deleteProperty(this.current, prop); },
+            getOwnPropertyDescriptor(_, prop) { return Reflect.getOwnPropertyDescriptor(this.current, prop); },
+            getPrototypeOf(_) { return Reflect.getPrototypeOf(this.current); },
+            has(_, key) { return handler.has(this.current, key); },
+            isExtensible(_) { return Reflect.isExtensible(this.current); },
+            ownKeys(_) { return handler.ownKeys(this.current); },
+            preventExtensions(_) { return Reflect.preventExtensions(this.current); },
+            setPrototypeOf(_, proto) { return Reflect.setPrototypeOf(this.current, proto); }
         });
         return retval;
     }
@@ -891,10 +900,15 @@ function Classic(base, data) {
                 }
             }
 
-            let exclusions = [Symbol.hasInstance, TARGET, NEW_TARGET, 
-                Classic.CLASS, "constructor"];
-            if (!exclusions.includes(prop) && (typeof(retval) === "function") &&
-                !retval.bound && (owners.get(retval) !== void 0)) {
+            if (![Symbol.hasInstance, TARGET, TARGET, NEW_TARGET,
+                  Classic.CLASS, "constructor", "__proto__"].includes(prop) && 
+                (typeof(retval) === "function") && 
+                !retval.bound &&
+                ![Object.prototype.isPrototypeOf].includes(retval) &&
+                !/_\$\d{4,}\$_/.test(retval.name) &&
+                ("_super" !== retval.name) &&
+                (!isNative(retval) 
+                 || new RegExp(`function ${retval.name}`).test(retval.toString()))) {
                 retval = Function.prototype.bind.call(retval, CJSProxy.getInstance(receiver));
                 retval.bound = true;
             }
@@ -1032,8 +1046,6 @@ function Classic(base, data) {
         };
     }
 
-    //Handle data conversion for the private and protected members;
-
     let className = data[Classic.CLASSNAME];
     let shadow = eval(`
     (function ${className}(...args) {
@@ -1147,17 +1159,15 @@ function Classic(base, data) {
     classDefs.set(pShadow, data);
 
     //Create the static private data object.
-    {
-        let spvtData = Object.create(data[Classic.STATIC][Classic.PRIVATE]);
-        let keys = Object.getOwnPropertySymbols(protMap.get(pShadow).r);
-        for (let key of keys) {
-            spvtData[key](key);
-        }
-    
-        doubleMapSet(pvt, shadow, shadow, spvtData);
-        pvt.set(pShadow, pvt.get(shadow));
-        doubleMapSet(pvt, pShadow, pShadow, spvtData);
+    let spvtData = Object.create(data[Classic.STATIC][Classic.PRIVATE]);
+    let keys = Object.getOwnPropertySymbols(protMap.get(pShadow).r);
+    for (let key of keys) {
+        spvtData[key](key);
     }
+
+    doubleMapSet(pvt, shadow, shadow, spvtData);
+    pvt.set(pShadow, pvt.get(shadow));
+    doubleMapSet(pvt, pShadow, pShadow, spvtData);
 
     //Fixup "instanceof" so it's a little less flakey.
     Object.defineProperty(shadow, Symbol.hasInstance, {
