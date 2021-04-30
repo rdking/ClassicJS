@@ -19,6 +19,7 @@ const UNUSED = Symbol("UNUSED");                //Used to ensure that a property
 const SUPER_CALLED = Symbol("SUPER_CALLED");    //Used to enable normal use of `this`.
 const NEW_TARGET = Symbol("NEW_TARGET");        //Used to hide the transfer of new.target from the constructor
 const BUILD_KEY = Symbol("BUILD_KEY");          //Used to pass along the key instance
+const FAKE = Symbol("FAKE");                    //Used to mark the temporary object used during construction
 
 let useStrings = false;
 let TRIGGER = '$';
@@ -343,7 +344,7 @@ function makePvtName(fn, owner) {
     let path = className + `/${fn.name.replace(" ", "-")}.js`;
     let retval = eval(`
         (function ${name}(...args) {
-            let inst = proxyMap.get(this) || this;
+            let inst = (this[FAKE]) ? this : CJSProxy.getInstance(this);
             stack.push(${name});
             let retval = fn.apply(inst, args); 
             stack.pop();
@@ -767,8 +768,7 @@ function Classic(base, data) {
                     if (typeof(retval) === "function") {
                         retval = new Proxy(retval, {
                             apply(target, _, args) {
-                                return Reflect.apply(target, isNative(retval, true) 
-                                    ? CJSProxy.getInstance(receiver) : receiver, args);
+                                return Reflect.apply(target, receiver, args);
                             }
                         });
                     }
@@ -864,7 +864,7 @@ function Classic(base, data) {
                     retval = Reflect.get(target, prop, receiver);
                 }
                 else {
-                    retval = this.createSuper(target);
+                    retval = this.createSuper(receiver);
                 }
             }
             else if ((typeof(prop) == "string") && (prop[0] === TRIGGER)) {
@@ -1069,7 +1069,7 @@ function Classic(base, data) {
         let hasCtor = !!data.constructor;
         let ancestor = hasCtor ? data.constructor : base;
         let superProto = Object.create(proto, {
-            fake: {
+            [FAKE]: {
                 configurable: true,
                 value: true
             },
