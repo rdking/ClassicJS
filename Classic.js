@@ -1,10 +1,3 @@
-/**
- * Adds peek() to Array to simplify looking at the top of the stack.
- */
- class Stack extends Array {
-    peek(n=0) { return this[this.length - (1 + n)]; }
-}
-
 const classDefs = new WeakMap;  //Processed definition of every declared class
 const owners = new WeakMap;     //Map of functions to owning class & instances to a Stack of classes
 const pvt = new WeakMap;        //Private data for each instance
@@ -12,8 +5,9 @@ const protMap = new WeakMap;    //Inheritable objects from each class
 const initFns = new WeakMap;    //Map of initialization functions
 const proxyMap = new WeakMap;   //Map of objects to privileged objects
 const proxyMapR = new WeakMap;  //Map of privileged objects to objects
-const stack = new Stack;        //Function registration used to validate access
 const buildQueue = new WeakMap; //Map of arrays to queue building private data
+const memberList = new WeakMap; //Map of classes to unique names
+const fnMap = new Map;          //Map of unique names to the target functions
 
 const UNUSED = Symbol("UNUSED");                //Used to ensure that a property isn't found.
 const SUPER_CALLED = Symbol("SUPER_CALLED");    //Used to enable normal use of `this`.
@@ -23,6 +17,7 @@ const FAKE = Symbol("FAKE");                    //Used to mark the temporary obj
 
 let useStrings = false;
 let TRIGGER = '$';
+let anonCount = 0;
 
 /**
  * @typedef DataSpec
@@ -97,10 +92,13 @@ class FlexibleProxy {
                     case SUPER_CALLED:
                         retval = !needSuper;
                         break;
-                    default: {
-                        retval = handler.get(this.current, prop, receiver, 1);
-                        break;
-                    }
+                    default:
+                        if (needSuper && ![FAKE, "super"].includes(prop)) {
+                            throw new SyntaxError('Must call "this.super()" before using `this`');
+                        }
+                        else {
+                            retval = handler.get(this.current, prop, receiver, 1);
+                        }
                 }
                 return retval;
             },
@@ -113,7 +111,7 @@ class FlexibleProxy {
                         break;
                     default:
                         if (needSuper) {
-                            throw new SyntaxError("Cannot use 'this' before calling super.");
+                            throw new SyntaxError('Must call "this.super()" before using `this`');
                         }
                         else {
                             retval = handler.set(this.current, prop, value, receiver, 1);
@@ -332,22 +330,18 @@ function generateAccessorGenerators(dest, src, base) {
  * member functions can be identified.
  * @param {Function} fn - Target function to wrap
  * @param {Function|Object} owner - Constructor or prototype of the owning class.
+ * @param {Function} ownerClass - Constructor of the owning class.
  * @returns {Function} - uniquely named wrapper function
  */
-function makePvtName(fn, owner) {
+function makePvtName(fn, owner, ownerClass) {
     let name = makeFnName();
-    let className = (typeof(owner) === "function") 
-        ? `${owner.name}/static`
-        : ("displayName" in owner.constructor)
-            ? owners.get(owner.constructor).constructor.name
-            : owner.constructor.name;
+    let className = `${ownerClass.name}${(owner === ownerClass) ? "/static" : ""}`;
     let path = className + `/${fn.name.replace(" ", "-")}.js`;
+    let isAsync = (new RegExp(`async\\s${fn.name}`)).test(fn.toString());
     let retval = eval(`
-        (function ${name}(...args) {
+        (${isAsync ? "async ": ""}function ${name}(...args) {
             let inst = (this[FAKE]) ? this : CJSProxy.getInstance(this);
-            stack.push(${name});
-            let retval = fn.apply(inst, args); 
-            stack.pop();
+            let retval = ${isAsync ? "await ": ""}fn.apply(inst, args); 
             return retval;
         })
         //# sourceURL=${window.location.origin}/ClassicJSGenerated/${path}
@@ -379,6 +373,10 @@ function makePvtName(fn, owner) {
         }
     });
 
+    if (!proxyMap.has(ownerClass)) {
+        memberList.get(ownerClass).push(name);
+    }
+    fnMap.set(name, new WeakRef(retval));
     owners.set(retval, owner);
     return retval;
 }
@@ -402,12 +400,11 @@ function convertData(data, ctor, base) {
         staticPub = {},
         baseDef = classDefs.get(base) || {
             [Classic.PUBLIC]: (typeof(base) === "function")
-                ? base.prototype
-                : Object.prototype
+                ? base.prototype : Object.prototype
         };
 
     //Put uniquely named wrappers around every function
-    function convert(dest, src, owner) {
+    function convert(dest, src, owner, ownerClass) {
         let keys = getAllOwnPropertyKeys(src);
 
         for (let key of keys) {
@@ -419,15 +416,15 @@ function convertData(data, ctor, base) {
 
             if ("value" in desc) {
                 if (typeof(desc.value) === "function") {
-                    desc.value = makePvtName(desc.value, owner);
+                    desc.value = makePvtName(desc.value, owner, ownerClass);
                 }
             }
             else {
                 if (("get" in desc) && desc.get) {
-                    desc.get = makePvtName(desc.get, owner);
+                    desc.get = makePvtName(desc.get, owner, ownerClass);
                 }
                 if (("set" in desc) && desc.set) {
-                    desc.set = makePvtName(desc.set, owner);
+                    desc.set = makePvtName(desc.set, owner, ownerClass);
                 }
             }
             Object.defineProperty(dest, key, desc);
@@ -466,8 +463,9 @@ function convertData(data, ctor, base) {
     generateAccessorGenerators(staticProt, data[Classic.STATIC][Classic.PROTECTED], ctor);
 
     //Wrap the public data. We need to fixup prototypes before running mapAccessors.
-    convert(pub, data[Classic.PUBLIC], ctor.prototype);
-    convert(staticPub, data[Classic.STATIC][Classic.PUBLIC], ctor);
+    ctor.prototype.constructor = ctor;
+    convert(pub, data[Classic.PUBLIC], ctor.prototype, ctor);
+    convert(staticPub, data[Classic.STATIC][Classic.PUBLIC], ctor, ctor);
     ctor.prototype = pub;
 
     //Map the inherited protected members with the current protected members.
@@ -483,14 +481,13 @@ function convertData(data, ctor, base) {
     Object.setPrototypeOf(staticProt, iStaticProt);
 
     //Wrap all the functions. No need to wrap the protected blocks.
-    convert(pvt, pvt, ctor.prototype);
-    convert(staticPvt, staticPvt, ctor);
+    convert(pvt, pvt, ctor.prototype, ctor);
+    convert(staticPvt, staticPvt, ctor, ctor);
 
     let retval = {
         ancestry: [ctor].concat(baseDef.ancestry || []),
         constructor: pub.hasOwnProperty("constructor")
-            ? pub.constructor
-            : void 0,
+            ? pub.constructor : void 0,
         [Classic.INHERITMODE]: data[Classic.INHERITMODE],
         [Classic.PRIVATE]: pvt,
         [Classic.PROTECTED]: prot,
@@ -508,6 +505,26 @@ function convertData(data, ctor, base) {
     return retval;
 }
 
+function getClassFn(offset) {
+    let retval = null;
+    let eStack = (new Error).stack.split(/\n/);
+    //V8 adds an error-type line in the stack trace.
+    if (eStack[0].substr(0,5) === "Error")
+        eStack.shift();
+
+    let line = eStack[3 + offset] ?? "";
+    let match = line.match(/(_\$\d{4,}\$_)/);
+    
+    if (match) {
+        retval = fnMap.get(match[1]);
+        if (retval) {
+            retval = retval.deref();
+        }
+    }
+
+    return retval;
+}
+
 /**
  * Verifies that the currently running function is a privileged function and
  * has the right to access private members of the receiver.
@@ -519,14 +536,10 @@ function convertData(data, ctor, base) {
  * and receiver are allowed to access.
  */
 function validateAccess(offset, receiver, isSuper) {
-    let eStack = (new Error).stack.split(/\n/);
-    let fn = stack.peek();
+    //Look for what should be a known function.
+    let fn = getClassFn(offset + 1);
 
-    //V8 adds an error-type line in the stack trace.
-    if (eStack[0].substr(0,5) === "Error")
-        eStack.shift();
-
-    if (!fn || !(eStack[3 + offset] ?? "").includes(fn.name))
+    if (!fn)
         throw new SyntaxError(`Invalid private access specifier encountered.`);
 
     let instanceClass = (typeof(receiver) !== "function") ? receiver.constructor : receiver;
@@ -604,7 +617,7 @@ function Super(inst, base, keyInst, ...args) {
 function fixupData(data) {
     let a = new Set([Classic.STATIC, Classic.PRIVATE, Classic.PROTECTED, Classic.PUBLIC]);
 
-    data[Classic.CLASSNAME] = data[Classic.CLASSNAME] || "ClassBase";
+    data[Classic.CLASSNAME] = data[Classic.CLASSNAME] || "anonymous" + anonCount++;
     data[Classic.INHERITMODE] = [Classic.ABSTRACT, Classic.FINAL, undefined].includes(data[Classic.INHERITMODE]) 
         ? data[Classic.INHERITMODE]
         : undefined;
@@ -752,11 +765,12 @@ function Classic(base, data) {
 
     const handler = {
         createSuper(receiver) {
+            let currentFn = getClassFn(1);
             let superHandler = {
                 superObj: (typeof(receiver) === "function")
-                    ? Object.getPrototypeOf(stack.peek().owner.constructor)
-                    : Object.getPrototypeOf(stack.peek().owner.constructor).prototype,
-                getter: getInstanceHandler(false),
+                    ? Object.getPrototypeOf(currentFn.owner.constructor)
+                    : Object.getPrototypeOf(currentFn.owner.constructor).prototype,
+                getter: getInstanceHandler(),
 
                 get(_, prop, rec) {
                     //TODO: Fix this so that it does a proper "super" lookup
@@ -793,7 +807,7 @@ function Classic(base, data) {
                         retval = target.prototype;
                     }
                 }
-                retval = new FlexibleProxy(retval, getInstanceHandler(false), handler);
+                retval = new FlexibleProxy(retval, getInstanceHandler(), handler);
                 CJSProxy.replace(retval, receiver);
                 return retval;
             };
@@ -805,7 +819,7 @@ function Classic(base, data) {
                 newProto = new Proxy(newProto, superHandler);
             }
             Object.setPrototypeOf(retval, newProto);
-            new CJSProxy(retval, getInstanceHandler(false));
+            new CJSProxy(retval, getInstanceHandler());
             return retval;
         },
         privateAccess(prop, receiver, offset, isSuper) {
@@ -937,18 +951,14 @@ function Classic(base, data) {
         }
     };
 
-    function getInstanceHandler(needSuper) {
+    function getInstanceHandler() {
         return {
             targetProto: void 0,
-            needSuper: !!needSuper,
             top_proto: null,
             originalProto: null,
             get(target, prop, receiver, offset=0, isSuper) {
                 let retval;
-                if (prop === SUPER_CALLED) {
-                    this.needSuper = false;
-                }
-                if (this.needSuper
+                if ((prop !== FAKE) && receiver[FAKE] && !receiver[SUPER_CALLED]
                     && ![NEW_TARGET, "super"].includes(prop)
                     && !classDefs.has(target)) {
                     throw new SyntaxError('Must call "this.super()" before using `this`');
@@ -971,7 +981,7 @@ function Classic(base, data) {
             set(target, prop, value, receiver, offset=0) {
                 let retval = false;
 
-                if (this.needSuper && (prop !== "super"))
+                if ((prop !== FAKE) && receiver[FAKE] && !receiver[SUPER_CALLED] && (prop !== "super"))
                     throw new SyntaxError('Must call "this.super()" before using `this`');
 
                 if (prop === PROTOTYPE) {
@@ -1121,6 +1131,8 @@ function Classic(base, data) {
 
     //Proxy the internal constructor function.
     let pShadow = new CJSProxy(shadow, getInstanceHandler());
+    memberList.set(shadow, (memberList.get(base) ?? []).slice());
+    memberList.set(pShadow, memberList.get(shadow));
     //Reify the class definition.
     data = convertData(data, pShadow, base);
 
