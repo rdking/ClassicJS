@@ -2,22 +2,23 @@ const classDefs = new WeakMap;  //Processed definition of every declared class
 const owners = new WeakMap;     //Map of functions to owning class & instances to a Stack of classes
 const pvt = new WeakMap;        //Private data for each instance
 const protMap = new WeakMap;    //Inheritable objects from each class
+const accessors = new WeakMap;  //Map of instance private accessor objects
 const initFns = new WeakMap;    //Map of initialization functions
-const proxyMap = new WeakMap;   //Map of objects to privileged objects
-const proxyMapR = new WeakMap;  //Map of privileged objects to objects
 const buildQueue = new WeakMap; //Map of arrays to queue building private data
 const memberList = new WeakMap; //Map of classes to unique names
 const fnMap = new Map;          //Map of unique names to the target functions
 
-const UNUSED = Symbol("UNUSED");                //Used to ensure that a property isn't found.
 const SUPER_CALLED = Symbol("SUPER_CALLED");    //Used to enable normal use of `this`.
 const NEW_TARGET = Symbol("NEW_TARGET");        //Used to hide the transfer of new.target from the constructor
 const BUILD_KEY = Symbol("BUILD_KEY");          //Used to pass along the key instance
 const FAKE = Symbol("FAKE");                    //Used to mark the temporary object used during construction
+const INSTANCE = Symbol("INSTANCE");            //Used to change the current instance in the constructor.
+const TOKEN = Symbol("TOKEN");                  //Used as the map key for a class or instance in lieu of the instance itself.
 
 let useStrings = false;
 let TRIGGER = '$';
 let anonCount = 0;
+let rOffset = 0;
 
 /**
  * @typedef DataSpec
@@ -28,110 +29,6 @@ let anonCount = 0;
  * @property {Object} public - The prototype of the public data object for each
  * class instance.
  */ 
-
-/**
- * @typedef CJSProxy
- * This is a proxy used to maintain the mapping between the original instance
- * and the newly created proxy.
- */
-class CJSProxy {
-    constructor(instance, handler) {
-        let retval = new Proxy(instance, handler);
-        proxyMap.set(instance, retval);
-        proxyMapR.set(retval, instance);
-        return retval;
-    }
-
-    static getInstance(obj) {
-        return proxyMapR.has(obj) ? proxyMapR.get(obj) : obj;
-    }
-
-    static getProxy(obj) {
-        return proxyMap.has(obj) ? proxyMap.get(obj) : obj;
-    }
-
-    static replace(oldObj, newObj) {
-        let { instance:inst, proxy } = this.getPair(oldObj);
-        proxyMapR.set(proxy, newObj);
-        proxyMap.set(newObj, proxy);
-        proxyMap.delete(inst);
-        if (owners.has(oldObj)) {
-            owners.set(newObj, owners.get(oldObj));
-            owners.delete(oldObj);
-        }
-    }
-
-    static getPair(obj) {
-        return {
-            instance: this.getInstance(obj),
-            proxy: this.getProxy(obj)
-        };
-    }
-
-    static delete(obj) {
-        let { instance:inst, proxy } = this.getPair(obj);
-        proxyMap.delete(inst);
-        proxyMapR.delete(proxy);
-    }
-}
-
-/**
- * @typedef FlexibleProxy
- * This is a proxy  that allows it's target to be altered.
- */
-class FlexibleProxy {
-    constructor(instance, newTarget, handler, needSuper) {
-        let retval = new CJSProxy(instance, {
-            get current() { return CJSProxy.getInstance(retval); },
-            get(_, prop, receiver) {
-                let retval;
-                switch (prop) {
-                    case NEW_TARGET:
-                        retval = newTarget;
-                        break;
-                    case SUPER_CALLED:
-                        retval = !needSuper;
-                        break;
-                    default:
-                        if (needSuper && ![FAKE, "super"].includes(prop)) {
-                            throw new SyntaxError('Must call "this.super()" before using `this`');
-                        }
-                        else {
-                            retval = handler.get(this.current, prop, receiver, 1);
-                        }
-                }
-                return retval;
-            },
-            set(_, prop, value, receiver) {
-                let retval = true;
-                switch (prop) {
-                    case SUPER_CALLED:
-                        if (needSuper)
-                            needSuper = !value;
-                        break;
-                    default:
-                        if (needSuper) {
-                            throw new SyntaxError('Must call "this.super()" before using `this`');
-                        }
-                        else {
-                            retval = handler.set(this.current, prop, value, receiver, 1);
-                        }
-                }
-                return retval;
-            },
-            defineProperty(_, prop, desc) { return handler.defineProperty(this.current, prop, desc); },
-            deleteProperty(_, prop) { return Reflect.deleteProperty(this.current, prop); },
-            getOwnPropertyDescriptor(_, prop) { return Reflect.getOwnPropertyDescriptor(this.current, prop); },
-            getPrototypeOf(_) { return Reflect.getPrototypeOf(this.current); },
-            has(_, key) { return handler.has(this.current, key); },
-            isExtensible(_) { return Reflect.isExtensible(this.current); },
-            ownKeys(_) { return handler.ownKeys(this.current); },
-            preventExtensions(_) { return Reflect.preventExtensions(this.current); },
-            setPrototypeOf(_, proto) { return Reflect.setPrototypeOf(this.current, proto); }
-        });
-        return retval;
-    }
-}
 
 /**
  * Retrieves the concatenated list of all own string and symbol property names.
@@ -153,7 +50,7 @@ function getAllPropertyKeys(obj) {
     while (![null, Object.prototype].includes(obj = Object.getPrototypeOf(obj))) {
         retval = retval.concat(getAllOwnPropertyKeys(obj));
     }
-    return (new Set(retval)).keys();
+    return Array.from((new Set(retval)).keys());
 }
 
 /**
@@ -241,10 +138,10 @@ function mapAccessors(owner, defs, parent, isStatic) {
 
     if (classDefs.has(parent)) {
         let pDefs = classDefs.get(parent);
-        let pSrc = isStatic ? pDefs[Classic.STATIC][Classic.PROTECTED] : pDefs[Classic.PROTECTED];
-        let oSrc = isStatic ? defs[Classic.STATIC][Classic.PROTECTED] : defs[Classic.PROTECTED];
-        let nmKey = isStatic ? parent : proxyMapR.get(parent.prototype) || {};
-        let nameMap = (protMap.get(nmKey) || {}).r;
+        let pSrc = (isStatic ? pDefs[Classic.STATIC] : pDefs)[Classic.PROTECTED];
+        let oSrc = (isStatic ? defs[Classic.STATIC] : defs)[Classic.PROTECTED];
+        let nmKey = isStatic ? parent : (parent.prototype || {});
+        let nameMap = protMap.get(nmKey)?.r || {};
         let keys = getAllPropertyKeys(pSrc);
         retval = {};
     
@@ -284,8 +181,7 @@ function generateAccessorGenerators(dest, src, base) {
                     get() {
                         let retval;
                         try {
-                            let mkey = (typeof(this) == "function") ? base 
-                                : CJSProxy.getInstance(this);
+                            let mkey = (typeof(this) == "function") ? base : this;
                             retval = doubleMapGet(pvt, base, mkey)[key];
                         }
                         catch(e) {
@@ -303,8 +199,7 @@ function generateAccessorGenerators(dest, src, base) {
                     },
                     set(v) {
                         try {
-                            let mkey2 = CJSProxy.getInstance((typeof(this) == "function")
-                                ? base : this);
+                            let mkey2 = (typeof(this) == "function") ? base : this;
                             doubleMapGet(pvt, base, mkey2)[key] = v;
                         }
                         catch(e) {
@@ -340,11 +235,10 @@ function makePvtName(fn, owner, ownerClass) {
     let isAsync = (new RegExp(`async\\s${fn.name}`)).test(fn.toString());
     let retval = eval(`
         (${isAsync ? "async ": ""}function ${name}(...args) {
-            let inst = (this[FAKE]) ? this : CJSProxy.getInstance(this);
-            let retval = ${isAsync ? "await ": ""}fn.apply(inst, args); 
+            let retval = ${isAsync ? "await ": ""}fn.apply(this, args); 
             return retval;
         })
-        //# sourceURL=${window.location.origin}/ClassicJSGenerated/${path}
+        //# sourceURL=${typeof(window)=="object"?window.location.origin:""}/ClassicJSGenerated/${path}
     `);
 
     Object.defineProperties(retval, {
@@ -358,7 +252,6 @@ function makePvtName(fn, owner, ownerClass) {
             configurable: true,
             writable: true,
             value: function bind(that, ...args) {
-                that = CJSProxy.getInstance(that);
                 return Function.prototype.bind.call(this, that, ...args);
             }
         },
@@ -373,9 +266,7 @@ function makePvtName(fn, owner, ownerClass) {
         }
     });
 
-    if (!proxyMap.has(ownerClass)) {
-        memberList.get(ownerClass).push(name);
-    }
+    memberList.get(ownerClass).push(name);
     fnMap.set(name, new WeakRef(retval));
     owners.set(retval, owner);
     return retval;
@@ -416,6 +307,10 @@ function convertData(data, ctor, base) {
 
             if ("value" in desc) {
                 if (typeof(desc.value) === "function") {
+                    if ((desc.value === Classic.ABSTRACT_FN) &&
+                        (data.inheritMode != Classic.ABSTRACT)) {
+                        throw new SyntaxError("Cannot assign Classic.ABSTRACT_FN in non-abstract class.");
+                    }
                     desc.value = makePvtName(desc.value, owner, ownerClass);
                 }
             }
@@ -485,9 +380,10 @@ function convertData(data, ctor, base) {
     convert(staticPvt, staticPvt, ctor, ctor);
 
     let retval = {
+        className: data.className,
         ancestry: [ctor].concat(baseDef.ancestry || []),
-        constructor: pub.hasOwnProperty("constructor")
-            ? pub.constructor : void 0,
+        constructor: pub.hasOwnProperty("constructor") ? pub.constructor : void 0,
+        staticConstructor: staticPub.hasOwnProperty("constructor") ? staticPub.constructor : void 0,
         [Classic.INHERITMODE]: data[Classic.INHERITMODE],
         [Classic.PRIVATE]: pvt,
         [Classic.PROTECTED]: prot,
@@ -498,6 +394,7 @@ function convertData(data, ctor, base) {
             [Classic.PUBLIC]: staticPub,
         }
     };
+    delete staticPub.constructor;
 
     //Link the inherited prototype with the current one.
     Object.setPrototypeOf(pub, base.prototype || null);
@@ -512,7 +409,7 @@ function getClassFn(offset) {
     if (eStack[0].substr(0,5) === "Error")
         eStack.shift();
 
-    let line = eStack[3 + offset] ?? "";
+    let line = eStack[2 + offset] ?? "";
     let match = line.match(/(_\$\d{4,}\$_)/);
     
     if (match) {
@@ -544,12 +441,10 @@ function validateAccess(offset, receiver, isSuper) {
 
     let instanceClass = (typeof(receiver) !== "function") ? receiver.constructor : receiver;
     let targetClass = owners.get(fn);
-    let validClasses = owners.has(instanceClass)
-        ? owners.get(instanceClass)
-        : owners.get(CJSProxy.getInstance(instanceClass));
+    let validClasses = owners.get(instanceClass);
 
     if (typeof(targetClass) !== "function") {
-        targetClass = CJSProxy.getProxy(targetClass.constructor);
+        targetClass = targetClass.constructor;
     }
 
     if (isSuper) {
@@ -593,7 +488,7 @@ function Super(inst, base, keyInst, ...args) {
 
     //Replace the target so the running constructor has the right object.
     let newInst = Reflect.construct(base, args, newTarget);
-    CJSProxy.replace(inst, newInst);
+    inst[INSTANCE] = newInst;
     base[BUILD_KEY] = null;
 
     if (isNative(base)) {
@@ -677,7 +572,6 @@ function runInitializers(inst, mProto) {
 
 function getInheritedPropertyDescriptor(obj, prop) {
     let retval;
-    obj = CJSProxy.getInstance(obj);
 
     while (obj && (typeof(obj) === "object")) {
         if (Object.prototype.hasOwnProperty.call(obj, prop)) {
@@ -686,13 +580,179 @@ function getInheritedPropertyDescriptor(obj, prop) {
         }
         else {
             obj = Object.getPrototypeOf(obj);
-            if (obj) {
-                obj = CJSProxy.getInstance(obj);
-            }
         }
     }
 
     return retval;
+}
+
+function bindFn(fn, inst, prop) {
+    let retval = fn;
+    if (![Symbol.hasInstance, Classic.CLASS, "constructor", "super"].includes(prop) && 
+        (typeof(retval) == "function") && /*!isNative(retval) &&*/
+        (Object.prototype.isPrototypeOf !== retval) &&
+        //!/(_\$\d{4,}\$_)|(_super)/.test(retval.name) &&
+        !retval.bound) {
+        retval = Function.prototype.bind.call(retval, inst);
+        retval.bound = true;
+    }
+    return retval;
+}
+
+/**
+ * Stages private data access on an instance by setting up the required
+ * accessors.
+ * @param {Object|Function} inst The instance object that owns the private data.
+ * @param {*} pData The private data container.
+ * @param {Function} _class The class whose private data is being staged.
+ * @param {Function?} newTarget The class being instantiated.
+ */
+function stagePrivateDataAccess(inst, pData, _class, newTarget) {
+    let keys = getAllPropertyKeys(pData);
+    let pa = Object.create(null);
+    let getDesc = function (token) {
+        return {
+            get: function privateAccess() {
+                let offset = rOffset;
+                rOffset = 0;
+                if (token === TRIGGER) {
+                    let {targetClass, instanceClass} = validateAccess(offset + 1, this);
+                    let retval = doubleMapGet(accessors, targetClass, this[TOKEN]);
+                    retval = Object.seal(Object.create(retval, {[INSTANCE]: { value: this[INSTANCE] ?? this }}));
+                    return retval;
+                }
+            }
+        };
+    };
+
+    let getPrivate = (prop, offset) => {
+        let {targetClass, instanceClass} = validateAccess(offset + rOffset + 1, inst);
+        let ptarget, pprop;
+        let extract = (byClass) => {
+            let mapKey = (typeof(inst) == "function") ? inst : inst.constructor.prototype;
+            let nameMap = (protMap.get(mapKey) || {}).f;
+            
+            ptarget = doubleMapGet(pvt, byClass, inst);
+            pprop = (nameMap && (prop in nameMap))
+                ? nameMap[prop] : prop;
+
+            if (!ptarget || !(pprop in ptarget)) {
+                throw new SyntaxError(`Invalid private access specifier encountered.`);
+            }
+        }
+
+        rOffset = 0;
+
+        try {
+            extract(instanceClass);
+        }
+        catch(e) {
+            extract(targetClass);
+        }
+
+        return { ptarget, pprop };
+    }
+
+    let getGetter = (prop) => {
+        return function getter() {
+            let {ptarget, pprop} = getPrivate(prop, 1);
+            let retval = Reflect.get(ptarget, pprop, inst);
+            return bindFn(retval, this[INSTANCE], prop);
+        }
+    };
+
+    let getSetter = (prop) => {
+        return function setPrivate(val) {
+            let {ptarget, pprop} = getPrivate(prop, 1);
+            return Reflect.set(ptarget, pprop, val, ptarget);
+        }
+    }
+
+    if (!(TOKEN in inst)) {
+        function createSuper() {
+            let currentFn = getClassFn(1);
+            let currentClass = owners.get(currentFn);
+            let self = this;
+            let retval;
+
+            if (typeof(currentClass) == "object") {
+                currentClass = currentClass.constructor;
+            }
+
+            if (currentClass) {
+                currentClass = Object.getPrototypeOf(currentClass);
+            }
+            
+            if (typeof(currentFn) == "function") {
+                let genProto = (target) => {
+                    let keys = getAllPropertyKeys(target.prototype);
+                    let proto = Object.defineProperty({}, "isSuper", { value: true });
+                    let getGetter = prop => () => bindFn(target.prototype[prop], self, prop);
+                    
+                    for (let key of keys) {
+                        if ((key != "constructor") && !(key in proto)) {
+                            Object.defineProperty(proto, key, { get: getGetter(key) });
+                        }
+                    }
+
+                    return proto;
+                }
+                
+                retval = function _super(className) {
+                    if (!["function", "string", "undefined"].includes(typeof(className))) {
+                        throw new TypeError(`If supplied a parameter, super() must be given a string or function.`)
+                    }
+                    let retval = currentClass.prototype;
+                    if (className) {
+                        let target = currentClass;
+
+                        while (target && (typeof(className) == "string")
+                            ? (target.name != className)
+                            : (target !== className)) {
+                            target = Object.getPrototypeOf(target);
+                        }
+    
+                        if (target) {
+                            retval = genProto(target);
+                        }
+                    }
+
+                    return retval;
+                };
+
+                Object.setPrototypeOf(retval, genProto(currentClass));
+            }
+
+            return retval;
+        }
+        
+        Object.defineProperties(inst, {
+            $: getDesc("$"),
+            _: getDesc("_"),
+            [TOKEN]: { value: inst },
+            cla$$: { get: () => newTarget ?? inst },
+            super: { get: createSuper }
+        });
+    }
+    
+    let mapKey = (typeof(inst) == "function") ? inst : inst.constructor.prototype;
+    let nameMap = (protMap.get(mapKey) || {}).r;
+    for (let key of keys) {
+        let prop = key;
+        if (typeof(key) == "symbol") {
+            key = nameMap[key];
+        }
+        if (key in pa) {
+            continue;
+        }
+        
+        Object.defineProperty(pa, key, {
+            get: getGetter(prop),
+            set: getSetter(prop)
+        });
+    }
+    
+    doubleMapSet(accessors, _class, inst[TOKEN], Object.seal(pa));
 }
 
 /**
@@ -763,407 +823,194 @@ function Classic(base, data) {
         throw new TypeError("Cannot extend a final class.");
     }
 
-    const handler = {
-        createSuper(receiver) {
-            let currentFn = getClassFn(1);
-            let superHandler = {
-                superObj: (typeof(receiver) === "function")
-                    ? Object.getPrototypeOf(currentFn.owner.constructor)
-                    : Object.getPrototypeOf(currentFn.owner.constructor).prototype,
-                getter: getInstanceHandler(),
-
-                get(_, prop, rec) {
-                    //TODO: Fix this so that it does a proper "super" lookup
-                    let {proxy: r, instance: t} = CJSProxy.getPair(receiver);
-                    let retval = (prop[0] === TRIGGER)
-                        ? this.getter.get(t, prop, r, 1, true)
-                        : Reflect.get(this.superObj, prop, rec);
-                    
-                    if (typeof(retval) === "function") {
-                        retval = new Proxy(retval, {
-                            apply(target, _, args) {
-                                return Reflect.apply(target, receiver, args);
-                            }
-                        });
-                    }
-                    return retval;
-                }
-            };
-            let retval = function _super(className) {
-                if (!["function", "string", "undefined"].includes(typeof(className))) {
-                    throw new TypeError(`If supplied a parameter, super() must be given a string or function.`)
-                }
-                let retval = base.prototype;
-                if (className) {
-                    let target = base;
-
-                    while (target && (typeof(className) === "string")
-                        ? (target.name !== className)
-                        : (target != className)) {
-                        target = Object.getPrototypeOf(target);
-                    }
-
-                    if (target) {
-                        retval = target.prototype;
-                    }
-                }
-                retval = new FlexibleProxy(retval, getInstanceHandler(), handler);
-                CJSProxy.replace(retval, receiver);
-                return retval;
-            };
-            Object.defineProperty(retval, "isSuper", { value: true });
-            let newProto = (typeof(receiver) === "function") 
-                ? base || null : ((base) ? base.prototype : null);
-
-            if (newProto) {
-                newProto = new Proxy(newProto, superHandler);
-            }
-            Object.setPrototypeOf(retval, newProto);
-            new CJSProxy(retval, getInstanceHandler());
-            return retval;
-        },
-        privateAccess(prop, receiver, offset, isSuper) {
-            let {targetClass, instanceClass} = validateAccess(offset, receiver, isSuper);
-            let propName = prop.substr(1);
-            let tKey = CJSProxy.getInstance(receiver);
-            let piTarget = doubleMapGet(pvt, instanceClass, tKey);
-            let ptTarget = doubleMapGet(pvt, targetClass, tKey);
-            let pKey = (typeof(receiver) === "function")
-                ? instanceClass
-                : CJSProxy.getInstance(instanceClass.prototype);
-            let nameMap = (protMap.get(pKey) || {}).f;
-            let ptarget, pprop;
-
-            if (nameMap && (propName in nameMap)) {
-                pprop = nameMap[propName];
-            }
-            else {
-                pprop = propName;
-            }
-
-            if (!isSuper && piTarget && (pprop in piTarget) &&
-                !Object.prototype.hasOwnProperty.call(piTarget, pprop)) {
-                
-                ptarget = piTarget;
-            }
-            else {
-                pKey = (typeof(receiver) === "function")
-                    ? targetClass
-                    : CJSProxy.getInstance(targetClass.prototype);
-                nameMap = (protMap.get(pKey) || {}).f;
-
-                if (nameMap && (propName in nameMap)) {
-                    pprop = nameMap[propName];
-                }
-                else {
-                    pprop = propName;
-                }
-
-                if (ptTarget && (pprop in ptTarget)) {
-                    ptarget = ptTarget;
-                }
-                else {
-                    throw new SyntaxError(`Invalid private access specifier encountered.`);
-                }
-            }
-
-            return { ptarget, pprop };
-        },
-        get(target, prop, receiver, offset, isSuper) {
-            let retval;
-            offset = offset || 0;
-
-            if ((prop === "super") && (target[SUPER_CALLED] !== false)) {
-                if (prop in target) {
-                    retval = Reflect.get(target, prop, receiver);
-                }
-                else {
-                    retval = this.createSuper(receiver);
-                }
-            }
-            else if ((typeof(prop) == "string") && (prop[0] === TRIGGER)) {
-                let { ptarget, pprop } = this.privateAccess(prop, receiver, offset + 1, isSuper);
-                retval = Reflect.get(ptarget, pprop, receiver);
-            }
-            else if (prop === Classic.CLASS) {
-                retval = pShadow;
-            }
-            else {
-                let desc = getInheritedPropertyDescriptor(target, prop);
-                if (desc && desc.get && !/_\$\d{4,}\$_/.test(desc.get.name)) {
-                    let context = CJSProxy.getInstance(receiver);
-                    retval = desc.get.call(context);
-                }
-                else {
-                    retval = Reflect.get(target, prop, receiver);
-                }
-            }
-
-            if (![Symbol.hasInstance, Classic.CLASS, "constructor"].includes(prop) && 
-                (typeof(retval) == "function") && /*!isNative(retval) &&*/
-                (Object.prototype.isPrototypeOf !== retval) &&
-                !/(_\$\d{4,}\$_)|(_super)/.test(retval.name) &&
-                !retval.bound) {
-                retval = Function.prototype.bind.call(retval, CJSProxy.getInstance(receiver));
-                retval.bound = true;
-            }
-
-            return retval;
-        },
-        set(target, prop, value, receiver, offset) {
-            let retval = false;
-            offset = offset || 0;
-
-            //Don't ever store the Flexible proxy
-            if (proxyMapR.has(value)) {
-                let tValue = CJSProxy.getInstance(value);
-                if (proxyMap.has(tValue)) {
-                    let pValue = proxyMap.get(tValue);
-                    if (pValue !== value) {
-                        value = pValue;
-                    }
-                }
-            }
-
-            if ((typeof(prop) == "string") && (prop[0] === TRIGGER)) {
-                let { ptarget, pprop } = this.privateAccess(prop, receiver, offset + 1);
-
-                if (pprop in ptarget) {
-                    ptarget[pprop] = value;
-                    retval = true;
-                }
-                else {
-                    throw new TypeError("Receiver does not contain the requested property.");
-                }
-            }
-            else {
-                let desc = getInheritedPropertyDescriptor(target, prop);
-                if (desc && desc.set && !/_\$\d{4,}\$_/.test(desc.set.name)) {
-                    let context = CJSProxy.getInstance(receiver, target);
-                    desc.set.call(context, value);
-                    retval = true;
-                }
-                else {
-                    retval = Reflect.set(target, prop, value, receiver);
-                }
-            }
-            return retval;
-        }
-    };
-
-    function getInstanceHandler() {
+    function getInstanceHandler(newTarget, needSuper) {
         return {
-            targetProto: void 0,
-            top_proto: null,
-            originalProto: null,
-            get(target, prop, receiver, offset=0, isSuper) {
+            current: null,
+
+            get(_, prop, receiver, offset=0, isSuper) {
                 let retval;
-                if ((prop !== FAKE) && receiver[FAKE] && !receiver[SUPER_CALLED]
-                    && ![NEW_TARGET, "super"].includes(prop)
-                    && !classDefs.has(target)) {
-                    throw new SyntaxError('Must call "this.super()" before using `this`');
-                }
-
-                if ((prop === "prototype") && this.top_proto) {
-                    retval = this.top_proto;
-                }
-                else {
-                    //Make sure we can't accidentally find a property we shouldn't.
-                    if (this.targetProto && !this.targetProto.hasOwnProperty(prop)) {
-                        prop = UNUSED;
-                    }
-                    
-                    retval = handler.get(target, prop, receiver, offset + 1, isSuper);
-                }
-
-                return retval;
-            },
-            set(target, prop, value, receiver, offset=0) {
-                let retval = false;
-
-                if ((prop !== FAKE) && receiver[FAKE] && !receiver[SUPER_CALLED] && (prop !== "super"))
-                    throw new SyntaxError('Must call "this.super()" before using `this`');
-
-                if (prop === PROTOTYPE) {
-                    this.top_proto = value;
-                    retval = true;
-                }
-                else {
-                    retval = handler.set(target, prop, value, receiver, offset + 1);
-                }
-
-                return retval;
-            },
-            ownKeys(target) {
-                if (this.needsSuper)
-                    throw new SyntaxError('Must call "this.super()" before using `this`');
-
-                return Reflect.ownKeys(target);
-            },
-            has(target, key) {
-                if (this.needsSuper)
-                    throw new SyntaxError('Must call "this.super()" before using `this`');
-
-                let retval;
-                if (this.targetProto) {
-                    retval = Reflect.ownKeys(target).includes(key)
-                        || Reflect.has(this.targetProto, key);
-                }
-                else {
-                    retval = Reflect.has(target, key);
+                switch (prop) {
+                    case NEW_TARGET:
+                        retval = newTarget;
+                        break;
+                    case SUPER_CALLED:
+                        retval = !needSuper;
+                        break;
+                    case INSTANCE:
+                        retval = this.current;
+                        break;
+                    default:
+                        if (needSuper && ![FAKE, "super"].includes(prop)) {
+                            throw new SyntaxError('Must call "this.super()" before using `this`');
+                        }
+                        rOffset = rOffset + offset + 2;
+                        retval = Reflect.get(this.current, prop, receiver);
+                        rOffset = 0;
+                        retval = bindFn(retval, this.current, prop);
                 }
                 return retval;
             },
-            defineProperty(target, prop, desc) {
-                if (this.needsSuper)
-                    throw new SyntaxError('Must call "this.super()" before using `this`');
-
-                let retval;
-                if ((typeof(prop) === "string") && (prop[0] === TRIGGER)) {
-                    throw new SyntaxError(`Use of "${TRIGGER}" disallowed in first character of identifier.`);
-                }
-                else {
-                    retval = Reflect.defineProperty(target, prop, desc);
+            set(_, prop, value, receiver, offset=0) {
+                let retval = true;
+                switch (prop) {
+                    case SUPER_CALLED:
+                        if (needSuper)
+                            needSuper = !value;
+                        break;
+                    case INSTANCE:
+                        this.current = value;
+                        break;
+                    default:
+                        if (needSuper) {
+                            throw new SyntaxError('Must call "this.super()" before using `this`');
+                        }
+                        rOffset = rOffset + offset + 2;
+                        retval = Reflect.set(this.current, prop, value, this.current);
+                        rOffset = 0;
                 }
                 return retval;
             },
-            apply(target, context, args) {
-                let fn = CJSProxy.getInstance(target);
-                this.targetProto = (owners.get(fn) || {}).prototype;
-                let retval = Reflect.apply(fn, context, args);
-                this.targetProto = void 0;
-                return retval;
-            }
+            defineProperty(_, prop, desc) { return Reflect.defineProperty(this.current, prop, desc); },
+            deleteProperty(_, prop) { return Reflect.deleteProperty(this.current, prop); },
+            getOwnPropertyDescriptor(_, prop) { return Reflect.getOwnPropertyDescriptor(this.current, prop); },
+            getPrototypeOf(_) { return Reflect.getPrototypeOf(this.current); },
+            has(_, key) { return Reflect.has(this.current, key); },
+            isExtensible(_) { return Reflect.isExtensible(this.current); },
+            ownKeys(_) { return Reflect.ownKeys(this.current); },
+            preventExtensions(_) { return Reflect.preventExtensions(this.current); },
+            setPrototypeOf(_, proto) { return Reflect.setPrototypeOf(this.current, proto); }
         };
     }
 
     let className = data[Classic.CLASSNAME];
     let shadow = eval(`
-    (function ${className}(...args) {
-        if (!new.target) {
-            return new ${className}(...args);
-            // throw new TypeError("Class constructor ${className} cannot be invoked without 'new'");
-        }
+        (function ${className}(...args) {
+            let newTarget = new.target;
+            if (!newTarget) {
+                return new ${className}(...args);
+                // throw new TypeError("Class constructor ${className} cannot be invoked without 'new'");
+            }
 
-        let keyInst = shadow[BUILD_KEY];
-        let proto = Object.getPrototypeOf(this);
-        let inheritMode = classDefs.get(shadow)[Classic.INHERITMODE];
-    
-        if ((inheritMode === Classic.ABSTRACT) && (proto === shadow.prototype)) {
-            throw new TypeError("Cannot instantiate an abstract class.");
-        }
-        else if ((inheritMode === Classic.FINAL) && (proto !== shadow.protoype)) {
-            throw new TypeError("Cannot extend a final class.");
-        }
-    
-        function initData(instance) {
-            //Create a proxy to use internally. Yup, an instance is an inverse membrane!
-            let pInstance = proxyMap.get(instance);
-            //Create the private data pool.
-            let pvtData = Object.create(data[Classic.PRIVATE]);
-            let keys = Object.getOwnPropertySymbols((protMap.get(CJSProxy.getInstance(shadow.prototype)) || {}).r);
-            for (let key of keys) { pvtData[key](key); }
-            //Initialize the public and private data.
-            runInitializers(instance, shadow.prototype);
-            runInitializers(pvtData, data[Classic.PRIVATE]);
-            //Save the private data
-            doubleMapSet(pvt, shadow, instance, pvtData);
-            pvt.set(pShadow, pvt.get(shadow));
-            doubleMapSet(pvt, shadow, pInstance, pvtData);
-            //Add the instance to the owner list
-            owners.set(instance, data.ancestry);
-            owners.set(pInstance, data.ancestry);
-        }
-    
-        let needSuper = (base !== Object);
-        let hasCtor = !!data.constructor;
-        let ancestor = hasCtor ? data.constructor : base;
-        let superProto = Object.create(proto, {
-            [FAKE]: {
-                configurable: true,
-                value: true
-            },
-            super: {
-                configurable: true,
-                value: function _super(...args) {
-                    if (!needSuper) {
-                        throw new SyntaxError("'this.super' call unexpected here");
+            let proto = Object.getPrototypeOf(this);
+            let inheritMode = classDefs.get(shadow)[Classic.INHERITMODE];
+            
+            if ((inheritMode === Classic.ABSTRACT) && (proto === shadow.prototype)) {
+                throw new TypeError("Cannot instantiate an abstract class.");
+            }
+            else if ((inheritMode === Classic.FINAL) && (proto !== shadow.protoype)) {
+                throw new TypeError("Cannot extend a final class.");
+            }
+            
+            function initData(instance) {
+                //Create the private data pool.
+                let pvtData = Object.create(data[Classic.PRIVATE]);
+                let map = protMap.get(shadow.prototype);
+                let ntMap = protMap.get(newTarget.prototype);
+                let keys = Object.getOwnPropertySymbols(map?.r ?? {});
+                for (let key of keys) {
+                    let ntKey = ntMap.f[map.r[key]] ?? key;
+                    if (!pvtData.hasOwnProperty(key)) {
+                        pvtData[key](ntKey);
                     }
-                    let instance = Super(this, base, keyInst, ...args);
-                    return instance;
                 }
+                //Save the private data
+                doubleMapSet(pvt, shadow, instance, pvtData);
+                //Initialize the public and private data.
+                stagePrivateDataAccess(instance, pvtData, shadow, newTarget);
+                runInitializers(instance, shadow.prototype);
+                runInitializers(pvtData, data[Classic.PRIVATE]);
+                //Add the instance to the owner list
+                owners.set(instance, data.ancestry);
             }
-        });
-        let initProto = new CJSProxy(superProto, handler);
-        let fakeInst = Object.create(initProto);
-        let instance = new FlexibleProxy(fakeInst, new.target, getInstanceHandler(), needSuper);
-        let retval;
-
-        owners.set(fakeInst, data.ancestry);
-        owners.set(instance, data.ancestry);
-        keyInst = keyInst || instance;
+            
+            let keyInst = shadow[BUILD_KEY];
+            let needSuper = (base !== Object);
+            let hasCtor = !!data.constructor;
+            let ancestor = hasCtor ? data.constructor : base;
+            let fakeProto = Object.create(proto, {
+                [FAKE]: {
+                    configurable: true,
+                    value: true
+                },
+                super: {
+                    configurable: true,
+                    value: function _super(...args) {
+                        if (!needSuper) {
+                            throw new SyntaxError("'this.super' call unexpected here");
+                        }
+                        let instance = Super(this, base, keyInst, ...args);
+                        return instance;
+                    }
+                }
+            });
+            let fakeInst = Object.create(fakeProto);
+            let handler = getInstanceHandler(new.target, needSuper);
+            let instance = new Proxy(fakeInst, handler);
+            let retval;
         
-        if (!buildQueue.has(keyInst)) {
-            buildQueue.set(keyInst, []);
-        }
-
-        let queue = buildQueue.get(keyInst);
-        queue.push(initData.bind(instance));
-
-        //Didn't provide a public constructor function
-        if (!hasCtor) {
-            retval = Super(instance, base, keyInst, ...args);
-        } 
-        else { //Provided a public constructor
-            //Run the constructor function.
-            if (!needSuper || (ancestor === Object)) {
-                Super(instance, base, keyInst, ...args);
+            handler.current = fakeInst;
+            owners.set(fakeInst, data.ancestry);
+            owners.set(instance, data.ancestry);
+            keyInst = keyInst || instance;
+            
+            if (!buildQueue.has(keyInst)) {
+                buildQueue.set(keyInst, []);
             }
-            retval = ancestor.apply(instance, args);
-        }
+        
+            let queue = buildQueue.get(keyInst);
+            queue.push(initData.bind(instance));
+        
+            //Didn't provide a public constructor function
+            if (!hasCtor) {
+                retval = Super(instance, base, keyInst, ...args);
+            } 
+            else { //Provided a public constructor
+                //Run the constructor function.
+                if (!needSuper || (ancestor === Object)) {
+                    Super(instance, base, keyInst, ...args);
+                }
+                retval = ancestor.apply(instance, args);
+            }
+            
+            if (!retval) {
+                retval = handler.current;
+            }
+            else {
+                retval = retval[INSTANCE] || retval;
+            }
 
-        retval = CJSProxy.getInstance((retval === void 0) ? instance : retval);
-        owners.delete(fakeInst);
-        CJSProxy.delete(initProto);
-       
-        //Return the unproxied version. We want to be Custom Elements compliant!
-        return retval;
-    })
-    //# sourceURL=${window.location.origin}/ClassicJSGenerated/${className}/ClassJS-constructor.js    
+            owners.delete(fakeInst);
+        
+            //Return the unproxied version. We want to be Custom Elements compliant!
+            return retval;
+        })
+        //# sourceURL=${typeof(window)=="object"?window.location.origin:""}/ClassicJSGenerated/${className}/ClassJS-constructor.js    
     `);
 
-    //Proxy the internal constructor function.
-    let pShadow = new CJSProxy(shadow, getInstanceHandler());
     memberList.set(shadow, (memberList.get(base) ?? []).slice());
-    memberList.set(pShadow, memberList.get(shadow));
     //Reify the class definition.
-    data = convertData(data, pShadow, base);
+    data = convertData(data, shadow, base);
 
     //Fixup the class constructor...
-    shadow.prototype = new CJSProxy(data[Classic.PUBLIC], handler);
+    shadow.prototype = data[Classic.PUBLIC];
     Object.defineProperty(shadow.prototype, "constructor", {
         enumerable: true,
-        value: pShadow
+        value: shadow
     });
 
     Object.setPrototypeOf(shadow, base);
     cloneProperties(shadow, data[Classic.STATIC][Classic.PUBLIC]);
-    delete shadow.constructor;  //...but don't add the static constructor!!!
-
     //Save the reified definition for later. Inheritors need to know.
     classDefs.set(shadow, data);
-    classDefs.set(pShadow, data);
 
     //Create the static private data object.
     let spvtData = Object.create(data[Classic.STATIC][Classic.PRIVATE]);
-    let keys = Object.getOwnPropertySymbols(protMap.get(pShadow).r);
+    let keys = Object.getOwnPropertySymbols(protMap.get(shadow).r);
     for (let key of keys) {
         spvtData[key](key);
     }
-
     doubleMapSet(pvt, shadow, shadow, spvtData);
-    pvt.set(pShadow, pvt.get(shadow));
-    doubleMapSet(pvt, pShadow, pShadow, spvtData);
+    stagePrivateDataAccess(shadow, spvtData, shadow);
 
     //Fixup "instanceof" so it's a little less flakey.
     Object.defineProperty(shadow, Symbol.hasInstance, {
@@ -1180,14 +1027,13 @@ function Classic(base, data) {
 
     //Register the heritage of the constructor for private access.
     owners.set(shadow, data.ancestry);
-    owners.set(pShadow, data.ancestry);
 
     //Call any existing static constructor
-    if (data[Classic.STATIC][Classic.PUBLIC].hasOwnProperty("constructor")) {
-        data[Classic.STATIC][Classic.PUBLIC].constructor.call(pShadow);
+    if (!!data.staticConstructor) {
+        data.staticConstructor.call(shadow);
     }
 
-    return pShadow;
+    return shadow;
 }
 
 const AccessLevels = {
@@ -1205,7 +1051,10 @@ const ClassConfigKeys = {
 const ClassConstants = {
     CLASS: Symbol("ClassicJS::CLASS"),
     ABSTRACT: Symbol("ClassicJS::ABSTRACT"),
-    FINAL: Symbol("ClassicJS::FINAL")
+    FINAL: Symbol("ClassicJS::FINAL"),
+    ABSTRACT_FN: function abstract() {
+        throw new ReferenceError("Cannot call an abstract function.");
+    }
 };
 
 Object.defineProperties(Classic, {
@@ -1263,6 +1112,10 @@ Object.defineProperties(Classic, {
         enumerable: true,
         get() { return useStrings ? "abstract" : ClassConstants.ABSTRACT; }
     },
+    ABSTRACT_FN: {
+        enumerable: true,
+        get() { return ClassConstants.ABSTRACT_FN; }
+    },
     FINAL: {
         enumerable: true,
         get() { return useStrings ? "final" : ClassConstants.FINAL; }
@@ -1287,7 +1140,7 @@ Object.defineProperties(Classic, {
     getInstance: {
         enumerable: true,
         value: function getInstance(obj) {
-            return CJSProxy.getInstance(obj);
+            return obj[INSTANCE];
         }
     }
 }); 

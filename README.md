@@ -2,6 +2,8 @@
 This is a library designed to provide fully privileged member support to ES6 classes. This means you get the full treatment of the access specifiers you may have become accustomed to when using lanugages like C#, Java, & C++. You get all of this without losing support for any of the existing language features.
 
 ## Features
+* Hard Version: No ability to leak private member names, but slower. Documented below.
+* Fast Version: Faster, but less elegant syntax, and private member names can be leaked. See the [README.md](./fast/README.md) in the "./fast" directory for the differences.
 * Private & Protected members on instances, even when Proxy-wrapped.
 * Private static & Protected Static members on Classic constructors.
 * Static constructor function.
@@ -98,8 +100,10 @@ In the example above, you probably noticed the use of `$` as the private access 
 
 ```js
 ...
-Classic.UseStrings = true;              //Turn on support for string section names
-Classic.PrivateAccessSpecifier = '_';   //Use underscore for private & protected access
+//Turn on support for string section names
+Classic.UseStrings = true;
+//Use underscore for private & protected access
+Classic.PrivateAccessSpecifier = '_';
 ...
 ```
 Currently, `Classic.PrivateAccessSpecifier` only accepts `_` & `$`. While it's possible to make it work without a private access specifier, that would require a lot more code to validate the class definition. It would no longer be viable to allow public members to have the same name as their private/protected counterparts.
@@ -124,9 +128,11 @@ const Ex2 = Classic(Ex, {
 });
 ```
 
-As you would expect, `private` members are not shared or exposed, and `protected` members are not exposed. In fact, the result of creating a new instance of a ClassicJS class is a seemingly normal object. It is not a Proxy, and that's precisely what allows ClassicJS classes to be used in creating HTML Custom Elements, extending native objects, and even interoperating (somewhat) with objects containing the new private fields. That being said, I would strongly suggest not trying to mix private fields into ClassicJS classes. They just won't work. While `new` returns a seemingly normal object, calling any function on that object turns `this` into a Proxy. ClassicJS class instance objects are essentially inverse membranes. Where a membrane uses a pair of Proxies to share the details of an instance, this inverse membrane exposes an instance to hide the details of a pair of Proxies. Fun right?
+As you would expect, `private` members are not shared or exposed, and `protected` members are not exposed. In fact, the result of creating a new instance of a ClassicJS class is a seemingly normal object. It is not a Proxy, and that's precisely what allows ClassicJS classes to be used in creating HTML Custom Elements, extending native objects, and even interoperating (somewhat) with objects containing the new private fields. 
 
-Another thing that just won't work is `super()`. Sadly, it's tied to the constructor function of `class`. As a replacement, ClassicJS provides `this.super()`. It has exactly the same functionality as `super()`. If you extend a base class without calling this function, you will not be able to use `this` to access anything in the class! Of course, if you don't specify a base class, or don't specify a constructor function, then calling `this.super()` is completely unnecessary and will be handled for you.
+That being said, I would strongly suggest not trying to mix private fields into ClassicJS classes. They just won't work. While `new` returns a seemingly normal object, calling any function on that object turns `this` into a Proxy. ClassicJS class instance objects are essentially inverse membranes. Where a membrane uses a pair of Proxies to share the details of an instance, this inverse membrane exposes an instance to hide the details of a pair of Proxies. Fun right?
+
+Another thing that just won't work is `super()`. Sadly, it's tied to the constructor function of `class`. As a replacement, ClassicJS provides `this.super()`. It has almost exactly the same functionality as `super()`. If you extend a base class without calling this function, you will not be able to use `this` to access anything in the class! Of course, if you don't specify a base class, or don't specify a constructor function, then calling `this.super()` is completely unnecessary and will be handled for you.
 
 ---
 ## The `Classic` Function

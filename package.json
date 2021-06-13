@@ -1,6 +1,6 @@
 {
   "name": "classicjs",
-  "version": "1.0.6",
+  "version": "1.1.0",
   "description": "A JavaScript class implementation with support for private, protected, and public, as well as HTML Custom Elements. Also provides support for instance initialization in the declaration.",
   "main": "Classic.js",
   "directories": {
@@ -34,7 +34,13 @@
     "jest": "^24.9.0"
   },
   "exports": {
-    "require": "./Classic.js",
-    "import": "./esm/Classic.mjs"
+    ".": {
+      "require": "./Classic.js",
+      "import": "./esm/Classic.mjs"
+    },
+    "./fast": {
+      "require": "./fast/Classic.js",
+      "import": "./fast/esm/Classic.mjs"
+    }
   }
 }
