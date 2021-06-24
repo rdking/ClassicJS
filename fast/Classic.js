@@ -233,7 +233,8 @@ function makePvtName(fn, owner, ownerClass) {
     let name = makeFnName();
     let className = `${ownerClass.name}${(owner === ownerClass) ? "/static" : ""}`;
     let path = className + `/${fn.name.replace(" ", "-")}.js`;
-    let isAsync = (new RegExp(`async\\s${fn.name}`)).test(fn.toString());
+    let isGen = (new RegExp(`function*\\s${fn.name}`)).test(fn.toString());
+    let isAsync = !isGen && (new RegExp(`async\\s${fn.name}`)).test(fn.toString());
     let retval = eval(`
         (${isAsync ? "async ": ""}function ${name}(...args) {
             ${isAsync ? `asyncStack.push(getStack());
