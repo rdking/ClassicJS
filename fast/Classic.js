@@ -19,6 +19,7 @@ let useStrings = false;
 let TRIGGER = '$';
 let anonCount = 0;
 let rOffset = 0;
+const asyncStack = [];
 
 /**
  * @typedef DataSpec
@@ -235,8 +236,10 @@ function makePvtName(fn, owner, ownerClass) {
     let isAsync = (new RegExp(`async\\s${fn.name}`)).test(fn.toString());
     let retval = eval(`
         (${isAsync ? "async ": ""}function ${name}(...args) {
-            let retval = ${isAsync ? "await ": ""}fn.apply(this, args); 
-            return retval;
+            ${isAsync ? `asyncStack.push(getStack());
+            `: ""}let retval = ${isAsync ? "await ": ""}fn.apply(this, args); 
+            ${isAsync ? `asyncStack.pop();`
+            : ""}return retval;
         })
         //# sourceURL=${typeof(window)=="object"?window.location.origin:""}/ClassicJSGenerated/${path}
     `);
@@ -402,14 +405,38 @@ function convertData(data, ctor, base) {
     return retval;
 }
 
+/**
+ * Gets as complete a stack frame as possible
+ * @returns Array representing current stack frame + async frame
+ */
+ function getStack() {
+    let retval = (new Error).stack.split(/\n/);
+    //Some browsers add an error-type line in the stack trace.
+    if (retval[0].substr(0,5) === "Error")
+        retval.shift();
+
+    //Remove getStack from the call list;
+    retval.shift();
+    if (!retval[retval.length-1].length) {
+        retval.pop();
+    }
+
+    let browser = globalThis?.navigator?.userAgent ?? "";
+    if (asyncStack.length && browser.includes("Firefox")) {
+        retval = retval.concat(asyncStack[asyncStack.length-1]);
+    }
+
+    return retval;
+}
+
 function getClassFn(offset) {
     let retval = null;
-    let eStack = (new Error).stack.split(/\n/);
+    let eStack = getStack();//(new Error).stack.split(/\n/);
     //V8 adds an error-type line in the stack trace.
     if (eStack[0].substr(0,5) === "Error")
         eStack.shift();
 
-    let line = eStack[2 + offset] ?? "";
+    let line = eStack[3 + offset] ?? "";
     let match = line.match(/(_\$\d{4,}\$_)/);
     
     if (match) {

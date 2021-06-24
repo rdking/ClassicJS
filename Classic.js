@@ -18,6 +18,7 @@ const FAKE = Symbol("FAKE");                    //Used to mark the temporary obj
 let useStrings = false;
 let TRIGGER = '$';
 let anonCount = 0;
+const asyncStack = [];
 
 /**
  * @typedef DataSpec
@@ -77,7 +78,7 @@ class CJSProxy {
 
 /**
  * @typedef FlexibleProxy
- * This is a proxy  that allows it's target to be altered.
+ * This is a proxy that allows it's target to be altered.
  */
 class FlexibleProxy {
     constructor(instance, newTarget, handler, needSuper) {
@@ -340,9 +341,11 @@ function makePvtName(fn, owner, ownerClass) {
     let isAsync = (new RegExp(`async\\s${fn.name}`)).test(fn.toString());
     let retval = eval(`
         (${isAsync ? "async ": ""}function ${name}(...args) {
-            let inst = (this[FAKE]) ? this : CJSProxy.getInstance(this);
-            let retval = ${isAsync ? "await ": ""}fn.apply(inst, args); 
-            return retval;
+            ${isAsync ? `asyncStack.push(getStack());
+            `: ""}let inst = (this[FAKE]) ? this : CJSProxy.getInstance(this);
+            let retval = ${isAsync ? "await ": ""}fn.apply(inst, args);
+            ${isAsync ? `asyncStack.pop();`
+            : ""}return retval;
         })
         //# sourceURL=${window.location.origin}/ClassicJSGenerated/${path}
     `);
@@ -505,9 +508,33 @@ function convertData(data, ctor, base) {
     return retval;
 }
 
+/**
+ * Gets as complete a stack frame as possible
+ * @returns Array representing current stack frame + async frame
+ */
+function getStack() {
+    let retval = (new Error).stack.split(/\n/);
+    //Some browsers add an error-type line in the stack trace.
+    if (retval[0].substr(0,5) === "Error")
+        retval.shift();
+
+    //Remove getStack from the call list;
+    retval.shift();
+    if (!retval[retval.length-1].length) {
+        retval.pop();
+    }
+
+    let browser = globalThis?.navigator?.userAgent ?? "";
+    if (asyncStack.length && browser.includes("Firefox")) {
+        retval = retval.concat(asyncStack[asyncStack.length-1]);
+    }
+
+    return retval;
+}
+
 function getClassFn(offset) {
     let retval = null;
-    let eStack = (new Error).stack.split(/\n/);
+    let eStack = getStack();//(new Error).stack.split(/\n/);
     //V8 adds an error-type line in the stack trace.
     if (eStack[0].substr(0,5) === "Error")
         eStack.shift();
@@ -1289,6 +1316,9 @@ Object.defineProperties(Classic, {
         value: function getInstance(obj) {
             return CJSProxy.getInstance(obj);
         }
+    },
+    asyncStack: {
+        get() { return asyncStack; }
     }
 }); 
 
