@@ -380,7 +380,7 @@ function makePvtName(fn, owner, ownerClass) {
     if (!proxyMap.has(ownerClass)) {
         memberList.get(ownerClass).push(name);
     }
-    fnMap.set(name, new WeakRef(retval));
+    fnMap.set(name, globalThis.WeakRef ? new WeakRef(retval) : retval);
     owners.set(retval, owner);
     return retval;
 }
@@ -569,7 +569,7 @@ function getClassFn(offset) {
     
     if (match) {
         retval = fnMap.get(match[1]);
-        if (retval) {
+        if (retval && globalThis.WeakRef) {
             retval = retval.deref();
         }
     }
