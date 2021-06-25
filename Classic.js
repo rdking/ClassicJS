@@ -338,8 +338,8 @@ function makePvtName(fn, owner, ownerClass) {
     let name = makeFnName();
     let className = `${ownerClass.name}${(owner === ownerClass) ? "/static" : ""}`;
     let path = className + `/${fn.name.replace(" ", "-")}.js`;
-    let isGen = (new RegExp(`*\\s${fn.name}`)).test(fn.toString());
-    let isAsync = !isGen && (new RegExp(`async\\s${fn.name}`)).test(fn.toString());
+    let isGen = (new RegExp(`(function)?\\*\\s${fn.name}`)).test(fn.toString());
+    let isAsync = !isGen && (new RegExp(`async(\\sfunction)?\\s${fn.name}`)).test(fn.toString());
     let retval = eval(`
         (${isAsync ? "async ": ""}function ${name}(...args) {
             ${isAsync ? `asyncStack.push(getStack());
@@ -526,8 +526,32 @@ function getStack() {
     }
 
     let browser = globalThis?.navigator?.userAgent ?? "";
-    if (asyncStack.length && browser.includes("Firefox")) {
-        retval = retval.concat(asyncStack[asyncStack.length-1]);
+    if (asyncStack.length) {
+        let stack = asyncStack[asyncStack.length-1];
+        if (browser.includes("Firefox")) {
+            retval = retval.concat(stack);
+        }
+        else if (browser.includes("Safari")) {
+            let bottom = 0;
+            for (let i=0; i<stack.length; ++i) {
+                if (stack[i].match(/(_\$\d{4,}\$_)/)) {
+                    bottom = i;
+                    break;
+                }
+            }
+
+            for (let i=retval.length-bottom; i>=0; --i) {
+                let j=0;
+                while (j<bottom && (retval[i+j] === stack[j++]));
+                if (j === bottom) {
+                    retval.length = i;
+                    retval = retval.concat(stack);
+                    break;
+                }
+            }
+
+            retval = retval.filter((v) => {return !v.includes("asyncFunctionResume@[native code]")});
+        }
     }
 
     return retval;
