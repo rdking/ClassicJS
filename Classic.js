@@ -14,6 +14,8 @@ const SUPER_CALLED = Symbol("SUPER_CALLED");    //Used to enable normal use of `
 const NEW_TARGET = Symbol("NEW_TARGET");        //Used to hide the transfer of new.target from the constructor
 const BUILD_KEY = Symbol("BUILD_KEY");          //Used to pass along the key instance
 const FAKE = Symbol("FAKE");                    //Used to mark the temporary object used during construction
+const SIGNATURES = Symbol("SIGNATURES");        //Used to mark all the constructors that initialized an instance
+const SIGNATURE = Symbol("SIGNATURE");          //Used to specify the signature of a given constructor
 
 let useStrings = false;
 let TRIGGER = '$';
@@ -327,6 +329,21 @@ function generateAccessorGenerators(dest, src, base) {
 }
 
 /**
+ * Generates a path prefix for a file.
+ * @returns {String} A forward slash (/) or the browser origin for this file.
+ */
+function getOrigin() {
+    let location = globalThis.location;
+    let retval = "/"
+
+    if (typeof(location) == "object")  {
+        retval = globalThis.location.origin;
+    }
+
+    return retval;
+}
+
+/**
  * Wraps fn with a uniquely identifiable function that ensures privileged
  * member functions can be identified.
  * @param {Function} fn - Target function to wrap
@@ -348,7 +365,7 @@ function makePvtName(fn, owner, ownerClass) {
             ${isAsync ? `asyncStack.pop();`
             : ""}return retval;
         })
-        //# sourceURL=${window.location.origin}/ClassicJSGenerated/${path}
+        //# sourceURL=${getOrigin()}/ClassicJSGenerated/${path}
     `);
 
     Object.defineProperties(retval, {
@@ -510,6 +527,22 @@ function convertData(data, ctor, base) {
 }
 
 /**
+ * Gets the user agent if running in a browser.
+ * @returns {String} The user agent string or an empty string.
+ */
+function getBrowser() {
+    let nav = globalThis && globalThis.navigator;
+    let retval = "";
+
+    if (typeof(nav) == "object") {
+        retval = globalThis.navigator.userAgent;
+        retval = retval ? retval : "";
+    }
+
+    return retval;
+}
+
+/**
  * Gets as complete a stack frame as possible
  * @returns Array representing current stack frame + async frame
  */
@@ -525,7 +558,7 @@ function getStack() {
         retval.pop();
     }
 
-    let browser = globalThis?.navigator?.userAgent ?? "";
+    let browser = getBrowser();
     if (asyncStack.length) {
         let stack = asyncStack[asyncStack.length-1];
         if (browser.includes("Firefox")) {
@@ -630,13 +663,14 @@ function isNative(fn, bound) {
 
 /**
  * The super constructor-calling function.
- * @param {*} inst - The instance object for the class being constructed
- * @param {*} base - The superclass that needs to be initialized
- * @param {*} keyInst - The fake instance created by the initiating descendant class
- * @param  {...any} args - Arguments to the superclass constructor
- * @returns {any} - the result of initializing the superclass
+ * @param {Object} inst - The instance object for the class being constructed
+ * @param {Function} klass - The class whose constructor is currently being executed
+ * @param {Function} base - The superclass that needs to be initialized
+ * @param {Proxy} keyInst - The fake instance created by the initiating descendant class
+ * @param  {*} args - Arguments to the superclass constructor
+ * @returns {*} - the result of initializing the superclass
  */
-function Super(inst, base, keyInst, ...args) {
+function Super(inst, klass, base, keyInst, ...args) {
     let newTarget = inst[NEW_TARGET];
     inst[SUPER_CALLED] = true;
 
@@ -648,7 +682,7 @@ function Super(inst, base, keyInst, ...args) {
     CJSProxy.replace(inst, newInst);
     base[BUILD_KEY] = null;
 
-    if (isNative(base)) {
+    if (!(inst instanceof klass)) {
         //Run through and initialize all the private areas.
         let queue = buildQueue.get(keyInst);
         while (queue.length) {
@@ -703,9 +737,10 @@ function fixupData(data) {
  * returned values on the instance object.
  * @param {Object} inst - the object to run initializers against
  * @param {Object} mProto - the prototype containing properties with values
+ * @param {Function} klass - the class being initialized
  * that are initializer keys
  */
-function runInitializers(inst, mProto) {
+function runInitializers(inst, mProto, klass) {
     let keys = getAllOwnPropertyKeys(mProto);
     let iProto = Object.getPrototypeOf(inst);
     let isID = pvt.has(inst);
@@ -718,7 +753,17 @@ function runInitializers(inst, mProto) {
             let val = (def) ? def.value : undefined;
 
             if (initFns.has(val)) {
-                inst[key] = initFns.get(val).call(this);
+                try {
+                    inst[key] = initFns.get(val).call(this);
+                }
+                catch (e) {
+                    if (e.message.includes(`is not a function`)) {
+                        throw new TypeError(`The initializer for "${klass.name}::${key}" is not a function.`);
+                    }
+                    else {
+                        throw e;
+                    }
+                }
             }
             else if (isID && (typeof(val) !== "function")) {
                 inst[key] = val;
@@ -745,6 +790,21 @@ function getInheritedPropertyDescriptor(obj, prop) {
     }
 
     return retval;
+}
+
+/**
+ * Applies a constructor signature to a class instance.
+ * @param {Object} instance The instance to sign.
+ * @param {Symbol} signature The signature to sign with.
+ */
+function signInstance(instance, signature) {
+    if (!(SIGNATURES in instance)) {
+        Object.defineProperty(instance, SIGNATURES, { value: {} });
+    }
+
+    if (!(signature in instance[SIGNATURES])) {
+        Object.defineProperty(instance[SIGNATURES], signature, { value: signature });
+    }
 }
 
 /**
@@ -1116,8 +1176,8 @@ function Classic(base, data) {
             let keys = Object.getOwnPropertySymbols((protMap.get(CJSProxy.getInstance(shadow.prototype)) || {}).r);
             for (let key of keys) { pvtData[key](key); }
             //Initialize the public and private data.
-            runInitializers(instance, shadow.prototype);
-            runInitializers(pvtData, data[Classic.PRIVATE]);
+            runInitializers(instance, shadow.prototype, shadow);
+            runInitializers(pvtData, data[Classic.PRIVATE], shadow);
             //Save the private data
             doubleMapSet(pvt, shadow, instance, pvtData);
             pvt.set(pShadow, pvt.get(shadow));
@@ -1125,6 +1185,8 @@ function Classic(base, data) {
             //Add the instance to the owner list
             owners.set(instance, data.ancestry);
             owners.set(pInstance, data.ancestry);
+            //Sign the instance
+            signInstance(instance, shadow[SIGNATURE]);
         }
     
         let needSuper = (base !== Object);
@@ -1141,7 +1203,7 @@ function Classic(base, data) {
                     if (!needSuper) {
                         throw new SyntaxError("'this.super' call unexpected here");
                     }
-                    let instance = Super(this, base, keyInst, ...args);
+                    let instance = Super(this, shadow, base, keyInst, ...args);
                     return instance;
                 }
             }
@@ -1181,7 +1243,7 @@ function Classic(base, data) {
         //Return the unproxied version. We want to be Custom Elements compliant!
         return retval;
     })
-    //# sourceURL=${window.location.origin}/ClassicJSGenerated/${className}/ClassJS-constructor.js    
+    //# sourceURL=${getOrigin()}/ClassicJSGenerated/${className}/ClassJS-constructor.js    
     `);
 
     //Proxy the internal constructor function.
@@ -1217,13 +1279,18 @@ function Classic(base, data) {
     pvt.set(pShadow, pvt.get(shadow));
     doubleMapSet(pvt, pShadow, pShadow, spvtData);
 
-    //Fixup "instanceof" so it's a little less flakey.
-    Object.defineProperty(shadow, Symbol.hasInstance, {
-        enumerable: true,
-        value: function(instance) {
-            return owners.has(instance)
-                && owners.get(instance).includes(this);
-        }
+    //Fixup "instanceof" so it's a little less flakey, and bind a signature
+    Object.defineProperties(shadow, {
+        [Symbol.hasInstance]: {
+            enumerable: true,
+            value: function(instance) {
+                return owners.has(instance)
+                    && owners.get(instance).includes(this)
+                    && SIGNATURES in instance
+                    && (shadow[SIGNATURE] in instance[SIGNATURES]);
+            }
+        },
+        [SIGNATURE]: { value: Symbol(shadow.name) }
     });
 
     //Seal up everything private
