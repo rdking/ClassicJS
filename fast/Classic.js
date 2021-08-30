@@ -1076,12 +1076,12 @@ function Classic(base, data) {
         
             //Didn't provide a public constructor function
             if (!hasCtor) {
-                retval = Super(instance, base, keyInst, ...args);
+                retval = Super(instance, shadow, base, keyInst, ...args);
             } 
             else { //Provided a public constructor
                 //Run the constructor function.
                 if (!needSuper || (ancestor === Object)) {
-                    Super(instance, base, keyInst, ...args);
+                    Super(instance, shadow, base, keyInst, ...args);
                 }
                 retval = ancestor.apply(instance, args);
             }
